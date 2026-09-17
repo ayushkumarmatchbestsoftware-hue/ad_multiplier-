@@ -30,7 +30,6 @@ from tools.credits import check_balance as _check_balance
 from tools.connection_status import xelta_connection_status as _xelta_connection_status
 from tools.reel_creator import create_reel as _create_reel
 from tools.image_gen import generate_image as _generate_image
-from tools.game_development import game_development_route as _game_development_route
 from tools.media_upload import (
     VIEW_CSP as UPLOAD_VIEW_CSP,
     VIEW_HTML as UPLOAD_VIEW_HTML,
@@ -512,34 +511,6 @@ async def generate_image(
         return await _generate_image(
             prompt, model_id, size, optimize_prompt, image_url, style_image_url
         )
-    except Exception as e:
-        return format_tool_error(e)
-
-
-@mcp.tool(
-    annotations={
-        "title": "Game Development Guide",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-async def game_development_route(topic: str = "") -> str:
-    """
-    Guide for building and deploying playable browser games with Xelta's MCP tools
-    (generate_image, create_reel).
-
-    Call with no topic first for the overview and pipeline routing. Call again with
-    topic='build-game', 'game-design', or 'stylization' to pull a specific reference
-    doc as that phase of the pipeline needs it.
-
-    Args:
-        topic: Leave empty for the overview. Otherwise one of: 'build-game', 'game-design',
-            'stylization'.
-    """
-    try:
-        return await _game_development_route(topic)
     except Exception as e:
         return format_tool_error(e)
 

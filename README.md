@@ -138,7 +138,6 @@ Check my Xelta credits
 | `xelta_login` / `xelta_logout` | Sign in or out of the Xelta account |
 | `check_balance` | Xelta credit balance |
 | `create_reel` | Short AI video reel from a prompt |
-| `game_development_route` | Reference docs for building browser games |
 
 ## Configuration
 
@@ -164,9 +163,8 @@ The local server keeps its state in git-ignored files next to `config.py`:
 
 `server.py` is the multi-user HTTP deployment behind `mcp.xelta.ai`. It uses
 OAuth 2.1 (including the device flow) and exposes `check_balance`,
-`xelta_connection_status`, `upload_media`, `generate_image`, `create_reel` and
-`game_development_route`, plus a bot-facing endpoint at `/bot-mcp`. It does not
-include the ad multiplier.
+`xelta_connection_status`, `upload_media`, `generate_image` and `create_reel`,
+plus a bot-facing endpoint at `/bot-mcp`. It does not include the ad multiplier.
 
 ```bash
 docker compose up -d --build     # expects .env and the external cloudflare_net network
@@ -192,7 +190,6 @@ docker compose up -d --build     # expects .env and the external cloudflare_net 
 │   ├── xelta_session.py       # Browser-session sign-in
 │   ├── widgets.py             # Widget resources and CSP
 │   └── *_widget.html          # Upload, sign-in and results widgets
-├── xelta-game-skill-bundle/   # Docs served by game_development_route
 └── tests/
 ```
 

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Xelta generation</title>
+<style>
+  :root {
+    --fg: #1f1f1f; --muted: #6b6b6b; --border: #e2e2e2; --accent: #2563eb;
+    --surface: #f4f4f4; --err: #b91c1c; --chip: rgba(0,0,0,.62);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fg: #ececec; --muted: #a3a3a3; --border: #3a3a3a; --accent: #60a5fa;
+      --surface: #262626; --err: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fg: #ececec; --muted: #a3a3a3; --border: #3a3a3a; --accent: #60a5fa;
+    --surface: #262626; --err: #f87171;
+  }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: transparent; color: var(--fg); }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { box-sizing: border-box; padding: 4px 0 8px; }
+  .standalone .wrap { max-width: 720px; margin: 24px auto; padding-inline: 16px; }
+  .status { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); }
+
+  /* align-items: start so a tall portrait video doesn't stretch its row-mates. */
+  .grid { display: grid; gap: 10px; align-items: start; }
+  .grid.many { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .grid.one { max-width: 560px; }
+
+  .card { position: relative; overflow: hidden; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+  .media { display: block; width: 100%; height: auto; background: var(--surface); }
+  .grid.many .media { max-height: 300px; object-fit: contain; }
+  img.media { cursor: zoom-in; }
+  .chip { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px;
+          font-size: 11.5px; font-weight: 600; background: var(--chip); color: #fff; }
+  .foot { display: flex; align-items: center; gap: 8px; padding: 7px 10px 9px; }
+  .caption { flex: 1; min-width: 0; margin: 0; font-size: 12.5px; color: var(--muted);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .act { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+         border: 1px solid var(--border); background: transparent; color: var(--fg); }
+  .act:hover { border-color: var(--accent); color: var(--accent); }
+
+  .placeholder { aspect-ratio: 1 / 1; display: flex; flex-direction: column; align-items: center;
+                 justify-content: center; gap: 6px; padding: 16px; text-align: center; box-sizing: border-box; }
+  .pending .placeholder {
+    background: linear-gradient(100deg, var(--surface) 30%, var(--border) 50%, var(--surface) 70%);
+    background-size: 300% 100%; animation: shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+  @media (prefers-reduced-motion: reduce) { .pending .placeholder { animation: none; } }
+  .placeholder strong { font-weight: 600; }
+  .placeholder span { font-size: 12px; color: var(--muted); }
+  .failed .placeholder strong { color: var(--err); }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap" hidden>
+  <p class="status" id="status" hidden></p>
+  <div class="grid" id="grid"></div>
+</div>
+
+<script type="module">
+  const SDK_URL = "https://unpkg.com/@modelcontextprotocol/ext-apps@2.0.0/app-with-deps";
+  const LIMIT_MS = 30 * 60 * 1000;   // Kling runs 2-5 min; past this it's stuck, not slow
+  const MAX_TRANSIENT = 6;           // same retry budget as Higgsfield's widget
+
+  const $ = (id) => document.getElementById(id);
+  let app = null;
+  let jobs = [];
+  const started = Date.now();
+  const timers = new Map();
+  const transient = new Map();
+  const reported = new Set();
+
+  const caps = () => (app && app.getHostCapabilities ? app.getHostCapabilities() || {} : {});
+  const terminal = (j) => j.status === "completed" || j.status === "failed";
+
+  function openExternal(url) {
+    if (app && caps().openLinks) app.openLink({ url }).catch(() => {});
+    else window.open(url, "_blank");
+  }
+
+  function say(text) {
+    if (app) app.sendMessage({ role: "user", content: [{ type: "text", text }] }).catch(() => {});
+  }
+
+  function mediaEl(result, job) {
+    if (result.type === "video") {
+      const v = document.createElement("video");
+      v.className = "media"; v.src = result.url + "#t=0.1"; v.controls = true;
+      v.playsInline = true; v.preload = "metadata";
+      return v;
+    }
+    const img = document.createElement("img");
+    img.className = "media"; img.src = result.url; img.loading = "lazy";
+    img.alt = job.caption || "Generated image";
+    img.onclick = () => openExternal(result.url);
+    return img;
+  }
+
+  function placeholder(job) {
+    const box = document.createElement("div");
+    box.className = "placeholder";
+    const title = document.createElement("strong");
+    const sub = document.createElement("span");
+    if (job.status === "failed") {
+      title.textContent = "Couldn't create this one";
+      sub.textContent = job.error || "Try again in a moment.";
+      box.append(title, sub);
+      if (job.recovery_tool === "xelta_login") {
+        const b = document.createElement("button");
+        b.className = "act"; b.textContent = "Sign in to Xelta";
+        b.onclick = () => say("Sign me in to Xelta, then retry my previous request.");
+        box.append(b);
+      }
+      return box;
+    }
+    if (job.type === "video" && job.stage === "preparing") {
+      // The source is being converted to what the model accepts (size, fps, length, format).
+      title.textContent = "Preparing your clip…";
+      const detail = job.stage_detail || "Checking it fits the model";
+      sub.textContent = detail.charAt(0).toUpperCase() + detail.slice(1) + ".";
+      box.append(title, sub);
+      return box;
+    }
+    title.textContent = job.type === "video" ? "Rendering video…" : "Creating image…";
+    sub.textContent = job.type === "video" ? "Usually 2–5 minutes. This updates by itself." : "A few seconds.";
+    box.append(title, sub);
+    return box;
+  }
+
+  function card(job, many) {
+    const el = document.createElement("div");
+    el.className = "card " + job.status;
+    const result = (job.results || [])[0];
+    el.appendChild(job.status === "completed" && result ? mediaEl(result, job) : placeholder(job));
+    if (many && job.label) {
+      const chip = document.createElement("span");
+      chip.className = "chip"; chip.textContent = job.label;
+      el.appendChild(chip);
+    }
+    const foot = document.createElement("div");
+    foot.className = "foot";
+    const cap = document.createElement("p");
+    cap.className = "caption"; cap.textContent = job.caption || ""; cap.title = job.caption || "";
+    foot.appendChild(cap);
+    if (job.status === "completed" && result && result.type === "image" && app) {
+      // Same idea as Higgsfield's Edit button: the message names the exact
+      // media_id, so "this one" can never be ambiguous.
+      const edit = document.createElement("button");
+      edit.className = "act"; edit.textContent = "Edit this";
+      edit.onclick = () => say(`I want to edit this image — media_id ${result.media_id}.`);
+      foot.appendChild(edit);
+    }
+    if (job.caption || foot.children.length > 1) el.appendChild(foot);
+    return el;
+  }
+
+  function render() {
+    if (!jobs.length) { $("wrap").hidden = true; return; }
+    $("wrap").hidden = false;
+    const many = jobs.length > 1;
+    $("grid").className = "grid " + (many ? "many" : "one");
+    $("grid").replaceChildren(...jobs.map((j) => card(j, many)));
+    const done = jobs.filter((j) => j.status === "completed").length;
+    const open = jobs.filter((j) => !terminal(j)).length;
+    const status = $("status");
+    status.hidden = !(many || open);
+    status.textContent = open ? `${done} of ${jobs.length} ready — the rest appear here automatically`
+                              : `${done} of ${jobs.length} ready`;
+  }
+
+  // Let the model know what finished, so a follow-up works without re-reading.
+  function report(job) {
+    if (reported.has(job.job_id) || !terminal(job) || !app || !caps().updateModelContext) return;
+    reported.add(job.job_id);
+    const r = (job.results || [])[0];
+    const text = job.status === "completed" && r
+      ? `${job.label || "Generation"} finished and is shown to the user: media_id ${r.media_id} (${r.type})${job.caption ? ` — "${job.caption}"` : ""}.`
+      : `${job.label || "Generation"} failed: ${job.error}${job.recovery_tool ? ` (recovery_tool: ${job.recovery_tool})` : ""}.`;
+    app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => {});
+  }
+
+  function schedule(job, seconds) {
+    clearTimeout(timers.get(job.job_id));
+    if (terminal(job) || !app || !caps().serverTools) return;
+    if (Date.now() - started > LIMIT_MS) {
+      Object.assign(job, { status: "failed", error: "This is taking much longer than usual. Ask me to check on it." });
+      render();
+      return;
+    }
+    timers.set(job.job_id, setTimeout(() => poll(job.job_id), Math.max(1, seconds || 3) * 1000));
+  }
+
+  async function poll(jobId) {
+    const job = jobs.find((j) => j.job_id === jobId);
+    if (!job) return;
+    try {
+      const res = await app.callServerTool({ name: "job_status", arguments: { job_id: jobId, source: "widget" } });
+      const next = res && !res.isError && res.structuredContent && res.structuredContent.job;
+      if (!next) throw new Error("no job in response");
+      transient.set(jobId, 0);
+      Object.assign(job, next);
+      render();
+      if (terminal(job)) report(job);
+      else schedule(job, job.poll_after_seconds);
+    } catch {
+      const n = (transient.get(jobId) || 0) + 1;
+      transient.set(jobId, n);
+      if (n <= MAX_TRANSIENT) schedule(job, Math.min(30, 3 * n));
+    }
+  }
+
+  function load(sc) {
+    jobs = (sc && sc.jobs) || [];
+    render();
+    jobs.forEach((j) => (terminal(j) ? report(j) : schedule(j, j.poll_after_seconds)));
+  }
+
+  function applyTheme(ctx) {
+    if (ctx && (ctx.theme === "dark" || ctx.theme === "light")) document.documentElement.dataset.theme = ctx.theme;
+  }
+
+  if (window.parent !== window) {
+    try {
+      const { App } = await import(SDK_URL);
+      app = new App({ name: "Xelta Generation", version: "2.0.0" });
+      app.ontoolresult = (r) => load(r && r.structuredContent);
+      app.onhostcontextchanged = applyTheme;
+      await app.connect();
+      applyTheme(app.getHostContext());
+    } catch { /* no host */ }
+  } else {
+    // Standalone preview for testing: #data=<base64url JSON of structuredContent>
+    document.body.classList.add("standalone");
+    const raw = new URLSearchParams(location.hash.slice(1)).get("data");
+    if (raw) {
+      try {
+        load(JSON.parse(decodeURIComponent(escape(atob(raw.replace(/-/g, "+").replace(/_/g, "/"))))));
+      } catch { /* malformed preview */ }
+    }
+  }
+</script>
+</body>
+</html>

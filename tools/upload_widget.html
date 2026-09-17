@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Xelta upload</title>
+<style>
+  :root {
+    --fg: #1f1f1f; --muted: #6b6b6b; --border: #d4d4d4; --accent: #2563eb;
+    --surface: #f5f5f5; --ok: #15803d; --err: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fg: #ececec; --muted: #a3a3a3; --border: #444; --accent: #60a5fa;
+      --surface: #262626; --ok: #4ade80; --err: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fg: #ececec; --muted: #a3a3a3; --border: #444; --accent: #60a5fa;
+    --surface: #262626; --ok: #4ade80; --err: #f87171;
+  }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: transparent; color: var(--fg); }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { box-sizing: border-box; max-width: 540px; padding: 10px 2px; }
+  .label { margin: 0 0 8px; font-weight: 600; }
+  .drop {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 20px 16px; border: 1.5px dashed var(--border); border-radius: 12px;
+    background: var(--surface); text-align: center; cursor: pointer; transition: border-color .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop.disabled { cursor: default; opacity: .55; pointer-events: none; }
+  .drop strong { color: var(--accent); }
+  .muted { color: var(--muted); font-size: 12.5px; }
+
+  .files { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+  .file {
+    display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center;
+    padding: 8px; border: 1px solid var(--border); border-radius: 10px;
+  }
+  .thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: var(--surface); }
+  .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 3px; margin-top: 5px; border-radius: 2px; background: var(--border); overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s; }
+  .state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .state.ok { color: var(--ok); } .state.err { color: var(--err); }
+
+  .actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+  button.primary {
+    font: inherit; padding: 7px 14px; border: 0; border-radius: 8px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  .status { margin: 8px 0 0; font-size: 12.5px; min-height: 1.2em; }
+  .status.err { color: var(--err); } .status.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="label" id="label" hidden></p>
+  <label class="drop disabled" id="drop">
+    <input id="file" type="file" hidden disabled>
+    <span><strong>Choose a file</strong> or drop it here</span>
+    <span class="muted" id="limits">Images up to 20 MB · any video up to 500 MB</span>
+  </label>
+  <ul class="files" id="files"></ul>
+  <div class="actions" id="actions" hidden><button class="primary" id="send" disabled>Continue</button></div>
+  <p class="status muted" id="status">Connecting…</p>
+</div>
+
+<script type="module">
+  const SDK_URL = "https://unpkg.com/@modelcontextprotocol/ext-apps@2.0.0/app-with-deps";
+  const $ = (id) => document.getElementById(id);
+
+  let app = null;
+  let config = { type: "auto", multiple: false, max_files: 1, min_files: 1, limits: {} };
+  let items = [];          // {id, file, kind, stage, progress, media, error, el}
+  let sent = false;
+
+  function setStatus(text, kind = "muted") {
+    $("status").textContent = text;
+    $("status").className = "status " + kind;
+  }
+
+  function kindOf(file) {
+    if (file.type.startsWith("image/")) return "image";
+    if (file.type.startsWith("video/")) return "video";
+    const n = file.name.toLowerCase();
+    if (/\.(png|jpe?g|webp)$/.test(n)) return "image";
+    if (/\.(mp4|mov|m4v|webm|mkv|avi)$/.test(n)) return "video";
+    return null;
+  }
+
+  function accept() {
+    if (config.type === "image") return "image/png,image/jpeg,image/webp";
+    if (config.type === "video") return "video/*,.mkv,.avi";
+    return "image/png,image/jpeg,image/webp,video/*,.mkv,.avi";
+  }
+
+  function configure(sc) {
+    config = { ...config, ...sc };
+    const l = config.limits || {};
+    $("limits").textContent =
+      config.type === "image" ? `PNG, JPEG or WebP · up to ${l.image_mb || 20} MB`
+      : config.type === "video" ? `Any video format or quality · up to ${l.video_mb || 500} MB`
+      : `Images up to ${l.image_mb || 20} MB · any video up to ${l.video_mb || 500} MB`;
+    if (config.label) { $("label").textContent = config.label; $("label").hidden = false; }
+    $("file").accept = accept();
+    $("file").multiple = !!config.multiple;
+    $("file").disabled = false;
+    $("drop").classList.remove("disabled");
+    $("actions").hidden = !config.multiple;
+    setStatus("");
+  }
+
+  // Tool results come back as structuredContent; errors as isError + text.
+  function structured(result, tool) {
+    if (!result || result.isError) {
+      const text = ((result && result.content) || []).map((c) => c.text || "").join(" ").trim();
+      throw new Error(text || `${tool} failed`);
+    }
+    return result.structuredContent || {};
+  }
+
+  function row(item) {
+    const li = document.createElement("li");
+    li.className = "file";
+    const thumb = document.createElement(item.kind === "image" ? "img" : "div");
+    thumb.className = "thumb";
+    if (item.kind === "image") thumb.src = URL.createObjectURL(item.file);
+    const mid = document.createElement("div");
+    mid.innerHTML = `<div class="name"></div><div class="bar"><div></div></div>`;
+    mid.querySelector(".name").textContent = item.file.name;
+    const state = document.createElement("span");
+    state.className = "state";
+    li.append(thumb, mid, state);
+    item.el = { li, fill: mid.querySelector(".bar > div"), state };
+    return li;
+  }
+
+  function paint(item) {
+    const s = item.el.state;
+    item.el.fill.style.width = `${Math.round((item.progress || 0) * 100)}%`;
+    s.className = "state" + (item.stage === "confirmed" ? " ok" : item.stage === "error" ? " err" : "");
+    s.textContent = { queued: "Waiting", uploading: "Uploading", confirming: "Checking",
+                      confirmed: "Ready ✓", error: item.error || "Failed" }[item.stage] || "";
+    s.title = item.stage === "error" ? item.error || "" : "";
+  }
+
+  function put(url, file, contentType, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url);
+      xhr.setRequestHeader("Content-Type", contentType || "application/octet-stream");
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) return resolve();
+        let msg = `Upload failed (${xhr.status})`;
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+        reject(new Error(msg));
+      };
+      xhr.onerror = () => reject(new Error("Network error — check your connection."));
+      xhr.send(file);
+    });
+  }
+
+  // media_upload -> PUT -> media_confirm, each tool call made through the host.
+  async function process(item) {
+    try {
+      item.stage = "uploading"; paint(item);
+      const slot = structured(await app.callServerTool({
+        name: "media_upload",
+        arguments: { filename: item.file.name, content_type: item.file.type || "" },
+      }), "media_upload").uploads?.[0];
+      if (!slot?.upload_url || !slot.media_id) throw new Error("No upload slot was issued.");
+      if (item.file.size > slot.max_bytes) throw new Error(`Too large (max ${Math.round(slot.max_bytes / 2 ** 20)} MB)`);
+
+      await put(slot.upload_url, item.file, item.file.type, (p) => { item.progress = p; paint(item); });
+
+      item.stage = "confirming"; paint(item);
+      const confirmed = structured(await app.callServerTool({
+        name: "media_confirm", arguments: { media_id: slot.media_id, type: item.kind },
+      }), "media_confirm").results?.[0];
+      if (!confirmed || confirmed.status !== "confirmed") throw new Error(confirmed?.error || "Couldn't confirm the upload.");
+
+      item.media = confirmed; item.stage = "confirmed"; item.progress = 1; paint(item);
+    } catch (e) {
+      item.stage = "error"; item.error = e.message || String(e); paint(item);
+    }
+    refresh();
+  }
+
+  function ready() { return items.filter((i) => i.stage === "confirmed"); }
+
+  function refresh() {
+    const done = ready();
+    const busy = items.some((i) => ["queued", "uploading", "confirming"].includes(i.stage));
+    $("send").disabled = busy || sent || done.length < (config.min_files || 1);
+    if (items.some((i) => i.stage === "error") && !busy) {
+      setStatus("Some files couldn't be uploaded — you can add them again.", "err");
+    }
+    // A single-file upload hands off by itself, like Higgsfield's.
+    if (!config.multiple && done.length === 1 && !busy && !sent) handOff();
+  }
+
+  // The media_id goes in the visible message on purpose: the transcript keeps it,
+  // so a later "edit that one" still resolves. Context update is belt and braces.
+  async function handOff() {
+    const done = ready();
+    if (!done.length || sent) return;
+    sent = true;
+    refresh();
+    const lines = done.map((i, n) =>
+      `${n + 1}. media_id: ${i.media.media_id}. type: ${i.media.type}. filename: ${i.file.name}.`);
+    const message = done.length === 1
+      ? `Upload complete. Use media_id ${done[0].media.media_id} as the ${done[0].media.type} input for my previous request. Filename: ${done[0].file.name}.`
+      : `Uploads complete (${done.length} files):\n${lines.join("\n")}\nUse these media_ids as the inputs for my previous request.`;
+    try {
+      await app.updateModelContext({ content: [{ type: "text", text: "Confirmed uploads:\n" + lines.join("\n") }] }).catch(() => {});
+      await app.sendMessage({ role: "user", content: [{ type: "text", text: message }] });
+      setStatus("Sent to Claude ✓", "ok");
+      await app.requestTeardown().catch(() => {});
+    } catch (e) {
+      sent = false;
+      setStatus("Uploaded, but couldn't send to Claude — send any message to continue.", "err");
+      refresh();
+    }
+  }
+
+  function addFiles(list) {
+    if (!app || sent) return;
+    const room = Math.max(0, (config.max_files || 1) - items.length);
+    const picked = [...list].slice(0, config.multiple ? room : 1);
+    if (!config.multiple) { items = []; $("files").replaceChildren(); }
+    for (const file of picked) {
+      const kind = kindOf(file);
+      if (!kind || (config.type !== "auto" && kind !== config.type)) {
+        setStatus(`${file.name}: that file type isn't accepted here.`, "err");
+        continue;
+      }
+      const item = { id: crypto.randomUUID(), file, kind, stage: "queued", progress: 0 };
+      items.push(item);
+      $("files").appendChild(row(item));
+      paint(item);
+      process(item);
+    }
+    refresh();
+  }
+
+  const drop = $("drop");
+  $("file").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
+  $("send").addEventListener("click", handOff);
+
+  function applyTheme(ctx) {
+    if (ctx && (ctx.theme === "dark" || ctx.theme === "light")) document.documentElement.dataset.theme = ctx.theme;
+  }
+
+  if (window.parent === window) {
+    setStatus("Open this upload box from Claude.", "err");
+  } else {
+    try {
+      const { App } = await import(SDK_URL);
+      app = new App({ name: "Xelta Upload", version: "2.0.0" });
+      app.ontoolresult = (r) => {
+        if (r?.isError) {
+          setStatus(((r.content || []).map((c) => c.text || "").join(" ")) || "Couldn't open the upload box.", "err");
+          return;
+        }
+        configure(r?.structuredContent || {});
+      };
+      app.onhostcontextchanged = applyTheme;
+      await app.connect();
+      applyTheme(app.getHostContext());
+      if (!(app.getHostCapabilities() || {}).serverTools) {
+        setStatus("This app can't upload from here. Ask Claude for a different way.", "err");
+      }
+    } catch (e) {
+      setStatus(`Couldn't start the upload box: ${e.message}`, "err");
+    }
+  }
+</script>
+</body>
+</html>

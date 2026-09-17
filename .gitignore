@@ -1,0 +1,49 @@
+# secrets
+.env
+*.token
+.xelta_session.json
+.xelta_session.tmp
+.xelta_media_history.json
+.xelta_media_history.tmp
+.xelta_media_library.json
+.xelta_media_library.tmp
+.xelta_jobs.json
+.xelta_jobs.tmp
+
+# runtime
+oauth.db
+
+# local tunnel-test artifacts (never commit)
+oauth_local.db*
+run-local-tunnel.sh
+
+# python
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# virtual envs
+.venv/
+venv/
+env/
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# os
+.DS_Store
+Thumbs.db
+
+requirement_docs/
+CLAUDE.md
+PLAN.md
+UNDERSTANDING.md
+add_all_services.md
+desktop.ini
+MCP_in_Cursor.md
+.claude/

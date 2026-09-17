@@ -1,0 +1,70 @@
+name: Deploy XLT MCP to EC2 - PROD
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: xlt-mcp-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/deploy/prod'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    environment: prod
+
+    steps:
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST_XLT_MCP_PROD }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY_XLT_MCP_PROD }}
+          port: 22
+          command_timeout: 25m
+          script: |
+            set -euo pipefail
+
+            APP_DIR="/home/ubuntu/xlt-mcp"
+            BRANCH="deploy/prod"
+            CONTAINER_NAME="xlt-mcp"
+
+            echo "Moving to app directory..."
+            cd "$APP_DIR"
+
+            echo "Syncing latest code..."
+            git fetch origin
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+
+            echo "Checking .env..."
+            if [ ! -f .env ]; then
+              echo ".env file not found on server"
+              exit 1
+            fi
+
+            echo "Ensuring cloudflare_net exists..."
+            docker network inspect cloudflare_net >/dev/null 2>&1 || docker network create cloudflare_net
+
+            echo "Stopping old container..."
+            docker compose --env-file .env down || true
+
+            echo "Building and starting container..."
+            docker compose --env-file .env up -d --build
+
+            echo "Waiting for service..."
+            sleep 10
+
+            echo "Health check..."
+            if curl -fsS http://0.0.0.0:8000/mcp; then
+              echo "XLT MCP prod is healthy"
+            else
+              echo "Health check failed. Showing logs..."
+              docker logs --tail=100 "$CONTAINER_NAME" || true
+              exit 0
+            fi
+
+            echo "Cleaning dangling images..."
+            docker image prune -f || true

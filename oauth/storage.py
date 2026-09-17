@@ -1,0 +1,513 @@
+"""SQLite-backed persistence for OAuth clients, codes, and tokens."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Any
+
+import aiosqlite
+
+logger = logging.getLogger(__name__)
+
+_TABLES = [
+    """
+    CREATE TABLE IF NOT EXISTS xelta_login_sessions (
+        session_id TEXT    PRIMARY KEY,
+        user_id    TEXT,
+        email      TEXT,
+        user_jwt   TEXT    NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS xelta_login_states (
+        state      TEXT    PRIMARY KEY,
+        pending_id TEXT    NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_clients (
+        client_id                TEXT PRIMARY KEY,
+        client_secret            TEXT,
+        client_id_issued_at      INTEGER NOT NULL,
+        client_secret_expires_at INTEGER,
+        redirect_uris            TEXT    NOT NULL,
+        grant_types              TEXT    NOT NULL,
+        response_types           TEXT    NOT NULL,
+        scope                    TEXT,
+        token_endpoint_auth_method TEXT,
+        client_name              TEXT,
+        client_uri               TEXT,
+        created_at               INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+        code                         TEXT  PRIMARY KEY,
+        client_id                    TEXT  NOT NULL,
+        redirect_uri                 TEXT  NOT NULL,
+        redirect_uri_provided_explicitly INTEGER NOT NULL DEFAULT 0,
+        scope                        TEXT,
+        resource                     TEXT,
+        code_challenge               TEXT  NOT NULL,
+        code_challenge_method        TEXT  NOT NULL DEFAULT 'S256',
+        user_jwt                     TEXT  NOT NULL,
+        expires_at                   REAL  NOT NULL,
+        used                         INTEGER NOT NULL DEFAULT 0,
+        created_at                   INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_access_tokens (
+        token      TEXT    PRIMARY KEY,
+        client_id  TEXT    NOT NULL,
+        scope      TEXT,
+        resource   TEXT,
+        user_jwt   TEXT    NOT NULL,
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+        token      TEXT    PRIMARY KEY,
+        client_id  TEXT    NOT NULL,
+        scope      TEXT,
+        resource   TEXT,
+        user_jwt   TEXT    NOT NULL,
+        expires_at INTEGER,
+        revoked    INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_device_codes (
+        device_code TEXT PRIMARY KEY,
+        user_code   TEXT NOT NULL UNIQUE,
+        client_id   TEXT NOT NULL,
+        scope       TEXT,
+        resource    TEXT,
+        user_jwt    TEXT,
+        status      TEXT NOT NULL,
+        interval    INTEGER NOT NULL,
+        expires_at  INTEGER NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+    )
+    """,
+]
+
+
+class OAuthStorage:
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        self._db: aiosqlite.Connection | None = None
+        self._init_lock = asyncio.Lock()
+        self._initialized = False
+
+    async def ensure_initialized(self) -> None:
+        """
+        Idempotent lazy initialization of the SQLite database.
+        
+        Safe to call multiple times — returns immediately if already initialized.
+        Uses an asyncio.Lock to prevent concurrent initialization races.
+        """
+        if self._initialized and self._db is not None:
+            return
+
+        async with self._init_lock:
+            # Double-check after acquiring lock
+            if self._initialized and self._db is not None:
+                return
+
+            # Create parent directory if it doesn't exist
+            db_path = Path(self._db_path)
+            if str(db_path) != ":memory:":
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Connect to SQLite
+            self._db = await aiosqlite.connect(self._db_path)
+            self._db.row_factory = aiosqlite.Row
+
+            # Enable WAL mode for better concurrency (except for :memory:)
+            if str(db_path) != ":memory:":
+                await self._db.execute("PRAGMA journal_mode=WAL")
+            
+            # Enable foreign keys
+            await self._db.execute("PRAGMA foreign_keys=ON")
+
+            # Create tables
+            for stmt in _TABLES:
+                await self._db.execute(stmt)
+            await self._db.commit()
+
+            self._initialized = True
+            logger.info(f"OAuth SQLite initialized at {self._db_path}")
+
+    async def initialize(self) -> None:
+        """Legacy initialization method — delegates to ensure_initialized()."""
+        await self.ensure_initialized()
+
+    async def close(self) -> None:
+        if self._db:
+            await self._db.close()
+            self._db = None
+            self._initialized = False
+
+    # ── internal helper ───────────────────────────────────────────────────────
+
+    async def _fetchone(self, sql: str, params: tuple = ()) -> dict[str, Any] | None:
+        await self.ensure_initialized()
+        async with self._db.execute(sql, params) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    # ── clients ───────────────────────────────────────────────────────────────
+
+    async def save_client(self, client_info: Any) -> None:
+        await self.ensure_initialized()
+        c = client_info
+        await self._db.execute(
+            """
+            INSERT OR REPLACE INTO oauth_clients
+                (client_id, client_secret, client_id_issued_at,
+                 client_secret_expires_at, redirect_uris, grant_types,
+                 response_types, scope, token_endpoint_auth_method,
+                 client_name, client_uri, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                c.client_id,
+                c.client_secret,
+                c.client_id_issued_at or int(time.time()),
+                c.client_secret_expires_at,
+                json.dumps([str(u) for u in (c.redirect_uris or [])]),
+                json.dumps(list(c.grant_types or ["authorization_code", "refresh_token"])),
+                json.dumps(list(c.response_types or ["code"])),
+                c.scope,
+                c.token_endpoint_auth_method,
+                c.client_name,
+                str(c.client_uri) if c.client_uri else None,
+                int(time.time()),
+            ),
+        )
+        await self._db.commit()
+
+    async def get_client(self, client_id: str) -> Any | None:
+        from mcp.shared.auth import OAuthClientInformationFull
+        from pydantic import AnyUrl
+
+        row = await self._fetchone(
+            "SELECT * FROM oauth_clients WHERE client_id = ?", (client_id,)
+        )
+        if row is None:
+            return None
+        return OAuthClientInformationFull(
+            client_id=row["client_id"],
+            client_secret=row["client_secret"],
+            client_id_issued_at=row["client_id_issued_at"],
+            client_secret_expires_at=row["client_secret_expires_at"],
+            redirect_uris=[AnyUrl(u) for u in json.loads(row["redirect_uris"])],
+            grant_types=json.loads(row["grant_types"]),
+            response_types=json.loads(row["response_types"]),
+            scope=row["scope"],
+            token_endpoint_auth_method=row["token_endpoint_auth_method"],
+            client_name=row["client_name"],
+            client_uri=row["client_uri"],
+        )
+
+    # ── auth codes ────────────────────────────────────────────────────────────
+
+    async def save_auth_code(
+        self,
+        *,
+        code: str,
+        client_id: str,
+        redirect_uri: str,
+        redirect_uri_provided_explicitly: bool,
+        scope: str | None,
+        resource: str | None,
+        code_challenge: str,
+        code_challenge_method: str,
+        user_jwt: str,
+        expires_at: float,
+    ) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            INSERT INTO oauth_auth_codes
+                (code, client_id, redirect_uri,
+                 redirect_uri_provided_explicitly, scope, resource,
+                 code_challenge, code_challenge_method,
+                 user_jwt, expires_at, used, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                code, client_id, redirect_uri,
+                1 if redirect_uri_provided_explicitly else 0,
+                scope, resource,
+                code_challenge, code_challenge_method,
+                user_jwt, expires_at, int(time.time()),
+            ),
+        )
+        await self._db.commit()
+
+    async def get_auth_code(self, code: str) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM oauth_auth_codes WHERE code = ?", (code,)
+        )
+
+    async def mark_code_used(self, code: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            "UPDATE oauth_auth_codes SET used = 1 WHERE code = ?", (code,)
+        )
+        await self._db.commit()
+
+    # ── access tokens ─────────────────────────────────────────────────────────
+
+    async def save_access_token(
+        self,
+        *,
+        token: str,
+        client_id: str,
+        scope: str | None,
+        resource: str | None,
+        user_jwt: str,
+        expires_at: int | None,
+    ) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            INSERT INTO oauth_access_tokens
+                (token, client_id, scope, resource, user_jwt, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (token, client_id, scope, resource, user_jwt, expires_at, int(time.time())),
+        )
+        await self._db.commit()
+
+    async def get_access_token(self, token: str) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM oauth_access_tokens WHERE token = ?", (token,)
+        )
+
+    # ── refresh tokens ────────────────────────────────────────────────────────
+
+    async def save_refresh_token(
+        self,
+        *,
+        token: str,
+        client_id: str,
+        scope: str | None,
+        resource: str | None,
+        user_jwt: str,
+        expires_at: int | None,
+    ) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            INSERT INTO oauth_refresh_tokens
+                (token, client_id, scope, resource,
+                 user_jwt, expires_at, revoked, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (token, client_id, scope, resource, user_jwt, expires_at, int(time.time())),
+        )
+        await self._db.commit()
+
+    async def get_refresh_token(self, token: str) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM oauth_refresh_tokens WHERE token = ? AND revoked = 0",
+            (token,),
+        )
+
+    async def revoke_refresh_token(self, token: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            "UPDATE oauth_refresh_tokens SET revoked = 1 WHERE token = ?", (token,)
+        )
+        await self._db.commit()
+
+    async def delete_access_token(self, token: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            "DELETE FROM oauth_access_tokens WHERE token = ?", (token,)
+        )
+        await self._db.commit()
+
+    # ── Xelta login sessions ──────────────────────────────────────────────────
+
+    async def save_device_code(
+        self,
+        *,
+        device_code: str,
+        user_code: str,
+        client_id: str,
+        scope: str | None,
+        resource: str | None,
+        interval: int,
+        expires_at: int,
+    ) -> None:
+        await self.ensure_initialized()
+        now = int(time.time())
+        await self._db.execute(
+            """
+            INSERT INTO oauth_device_codes
+                (device_code, user_code, client_id, scope, resource, user_jwt,
+                 status, interval, expires_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, NULL, 'pending', ?, ?, ?, ?)
+            """,
+            (device_code, user_code, client_id, scope, resource, interval, expires_at, now, now),
+        )
+        await self._db.commit()
+
+    async def get_device_code(self, device_code: str) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM oauth_device_codes WHERE device_code = ?", (device_code,)
+        )
+
+    async def get_device_code_by_user_code(self, user_code: str) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM oauth_device_codes WHERE user_code = ?", (user_code,)
+        )
+
+    async def approve_device_code(self, user_code: str, user_jwt: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            UPDATE oauth_device_codes
+            SET status = 'approved', user_jwt = ?, updated_at = ?
+            WHERE user_code = ? AND status = 'pending'
+            """,
+            (user_jwt, int(time.time()), user_code),
+        )
+        await self._db.commit()
+
+    async def deny_device_code(self, user_code: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            UPDATE oauth_device_codes
+            SET status = 'denied', updated_at = ?
+            WHERE user_code = ? AND status = 'pending'
+            """,
+            (int(time.time()), user_code),
+        )
+        await self._db.commit()
+
+    async def consume_device_code(self, device_code: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            UPDATE oauth_device_codes
+            SET status = 'consumed', updated_at = ?
+            WHERE device_code = ?
+            """,
+            (int(time.time()), device_code),
+        )
+        await self._db.commit()
+
+    async def save_login_session(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        email: str,
+        user_jwt: str,
+        expires_at: int,
+    ) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            INSERT OR REPLACE INTO xelta_login_sessions
+                (session_id, user_id, email, user_jwt, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (session_id, user_id, email, user_jwt, expires_at, int(time.time())),
+        )
+        await self._db.commit()
+
+    async def get_login_session(self, session_id: str) -> dict[str, Any] | None:
+        if not session_id:
+            return None
+        row = await self._fetchone(
+            "SELECT * FROM xelta_login_sessions WHERE session_id = ? AND expires_at > ?",
+            (session_id, int(time.time())),
+        )
+        return row
+
+    async def delete_login_session(self, session_id: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            "DELETE FROM xelta_login_sessions WHERE session_id = ?", (session_id,)
+        )
+        await self._db.commit()
+
+    # ── Xelta login states (one-time OAuth state tokens) ─────────────────────
+
+    async def save_login_state(
+        self,
+        *,
+        state: str,
+        pending_id: str,
+        expires_at: int,
+    ) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            """
+            INSERT OR REPLACE INTO xelta_login_states
+                (state, pending_id, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (state, pending_id, expires_at, int(time.time())),
+        )
+        await self._db.commit()
+
+    async def get_login_state(self, state: str) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM xelta_login_states WHERE state = ? AND expires_at > ?",
+            (state, int(time.time())),
+        )
+
+    async def delete_login_state(self, state: str) -> None:
+        await self.ensure_initialized()
+        await self._db.execute(
+            "DELETE FROM xelta_login_states WHERE state = ?", (state,)
+        )
+        await self._db.commit()
+
+    # ── Health check ──────────────────────────────────────────────────────────
+
+    async def health_check(self) -> dict[str, Any]:
+        """
+        Check database health and return status information.
+        
+        Returns:
+            dict with keys:
+                - oauth_db_initialized: bool
+                - oauth_db_path: str (only if not sensitive)
+        """
+        try:
+            await self.ensure_initialized()
+            # Simple query to verify DB is working
+            async with self._db.execute("SELECT 1") as cur:
+                await cur.fetchone()
+            
+            return {
+                "oauth_db_initialized": True,
+                "oauth_db_path": self._db_path if self._db_path != ":memory:" else ":memory:",
+            }
+        except Exception as e:
+            logger.error(f"OAuth storage health check failed: {e}")
+            return {
+                "oauth_db_initialized": False,
+                "error": str(e),
+            }

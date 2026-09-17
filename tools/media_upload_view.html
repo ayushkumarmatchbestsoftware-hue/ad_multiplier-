@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Upload image — Xelta</title>
+<style>
+  :root {
+    --fg: #1f1f1f; --muted: #6b6b6b; --border: #cfcfcf; --accent: #2563eb;
+    --surface: #f6f6f6; --ok: #15803d; --err: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fg: #ececec; --muted: #a3a3a3; --border: #444; --accent: #60a5fa;
+      --surface: #2a2a2a; --ok: #4ade80; --err: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fg: #ececec; --muted: #a3a3a3; --border: #444; --accent: #60a5fa;
+    --surface: #2a2a2a; --ok: #4ade80; --err: #f87171;
+  }
+  html, body { margin: 0; background: transparent; color: var(--fg); }
+  /* Class display rules below would otherwise override the hidden attribute. */
+  [hidden] { display: none !important; }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { box-sizing: border-box; max-width: 520px; padding: 12px; }
+  .standalone .wrap { margin: 40px auto; padding-inline: 16px; }
+  .drop {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 22px 16px; border: 1.5px dashed var(--border); border-radius: 12px;
+    background: var(--surface); text-align: center; cursor: pointer;
+    transition: border-color .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop.disabled { cursor: default; opacity: .6; }
+  .drop strong { color: var(--accent); }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  .preview { display: block; max-width: 100%; max-height: 220px; margin: 12px auto 0; border-radius: 8px; }
+  .bar { height: 4px; margin-top: 12px; border-radius: 2px; background: var(--border); overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s; }
+  .status { min-height: 1.45em; margin: 10px 0 0; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+  .result { display: flex; gap: 6px; margin-top: 8px; }
+  .result input {
+    flex: 1; min-width: 0; padding: 6px 8px; font: 12.5px ui-monospace, monospace;
+    color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .result button {
+    padding: 6px 12px; font: inherit; color: #fff; background: var(--accent);
+    border: 0; border-radius: 6px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <label class="drop disabled" id="drop">
+    <input id="file" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" hidden disabled>
+    <span><strong>Choose a file</strong> or drop it here</span>
+    <span class="muted">Images up to <span id="max">20</span> MB · MP4 video up to <span id="maxv">200</span> MB</span>
+  </label>
+  <img class="preview" id="preview" alt="Selected image" hidden>
+  <div class="bar" id="bar" hidden><div id="fill"></div></div>
+  <p class="status muted" id="status">Preparing upload…</p>
+  <div class="result" id="result" hidden>
+    <input id="url" readonly aria-label="Uploaded image URL">
+    <button id="copy" type="button">Copy</button>
+  </div>
+</div>
+
+<script type="module">
+  const SDK_URL = "https://unpkg.com/@modelcontextprotocol/ext-apps@2.0.0/app-with-deps";
+  const TYPES = ["image/png", "image/jpeg", "image/webp", "video/mp4", "video/quicktime"];
+  const embedded = window.parent !== window;
+
+  const $ = (id) => document.getElementById(id);
+  let uploadUrl = null;
+  let maxMb = 20;
+  let maxVideoMb = 200;
+  let busy = false;
+  let app = null;
+
+  function setStatus(text, kind = "") {
+    const el = $("status");
+    el.textContent = text;
+    el.className = "status " + (kind || "muted");
+  }
+
+  function ready(url, mb, videoMb) {
+    uploadUrl = url;
+    if (mb) { maxMb = mb; $("max").textContent = mb; }
+    if (videoMb) { maxVideoMb = videoMb; $("maxv").textContent = videoMb; }
+    $("drop").classList.remove("disabled");
+    $("file").disabled = false;
+    setStatus("");
+  }
+
+  function applyTheme(ctx) {
+    if (ctx?.theme === "dark" || ctx?.theme === "light") {
+      document.documentElement.dataset.theme = ctx.theme;
+    }
+  }
+
+  function onToolResult(result) {
+    if (result?.isError) {
+      const text = (result.content || []).map((c) => c.text || "").join(" ").trim();
+      setStatus(text || "Couldn't start the upload.", "err");
+      return;
+    }
+    const sc = result?.structuredContent || {};
+    if (sc.upload_url) ready(sc.upload_url, sc.max_mb, sc.max_video_mb);
+    else setStatus("Upload link missing — ask for a new upload box.", "err");
+  }
+
+  function upload(file) {
+    if (busy || !uploadUrl || !file) return;
+    if (!TYPES.includes(file.type)) {
+      setStatus("Only PNG, JPEG, WebP or MP4/MOV files are supported.", "err");
+      return;
+    }
+    const isVideo = file.type.startsWith("video/");
+    const limitMb = isVideo ? maxVideoMb : maxMb;
+    if (file.size > limitMb * 1024 * 1024) {
+      setStatus(`${isVideo ? "Video" : "Image"} is too large (max ${limitMb} MB).`, "err");
+      return;
+    }
+
+    busy = true;
+    $("drop").classList.add("disabled");
+    $("result").hidden = true;
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = () => { $("preview").src = reader.result; $("preview").hidden = false; };
+      reader.readAsDataURL(file);
+    } else {
+      $("preview").hidden = true;
+    }
+
+    $("bar").hidden = false;
+    $("fill").style.width = "0";
+    setStatus("Uploading…");
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", uploadUrl);
+    xhr.setRequestHeader("Content-Type", file.type);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) $("fill").style.width = `${(e.loaded / e.total) * 100}%`;
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 200 && data.url) return done(data.url, data.kind);
+      fail(data.error || `Upload failed (${xhr.status}).`);
+    };
+    xhr.onerror = () => fail("Network error — check your connection and try again.");
+    xhr.send(file);
+  }
+
+  function fail(message) {
+    busy = false;
+    $("bar").hidden = true;
+    $("drop").classList.remove("disabled");
+    setStatus(message, "err");
+  }
+
+  async function done(url, kind) {
+    busy = false;
+    $("bar").hidden = true;
+    $("drop").classList.remove("disabled");
+    const noun = kind === "video" ? "video" : "image";
+
+    if (!app) {
+      // Standalone page opened from the fallback link: the user has to carry the
+      // URL back to the chat themselves, so this is the one place it's shown.
+      $("url").value = url;
+      $("result").hidden = false;
+      setStatus("Uploaded. Copy this link and paste it into your chat.", "ok");
+      return;
+    }
+
+    // Hand the URL to Claude out of sight, and keep the chat message human.
+    // Only when the host can't take silent context does the URL go in the
+    // message — otherwise Claude would have no way to use the upload.
+    const caps = app.getHostCapabilities ? app.getHostCapabilities() || {} : {};
+    let contextDelivered = false;
+    if (caps.updateModelContext) {
+      try {
+        await app.updateModelContext({
+          content: [{
+            type: "text",
+            text: `The user just uploaded a ${noun}. Its URL is ${url} — pass it as ` +
+                  `image_url (generate_image) or source_url (multiply_ad). It is already ` +
+                  `shown to the user; don't repeat the URL back to them. If this URL is no ` +
+                  `longer in context later, recent_media returns it.`,
+          }],
+        });
+        contextDelivered = true;
+      } catch {}
+    }
+
+    const text = contextDelivered ? `I've uploaded my ${noun}.` : `I've uploaded my ${noun}: ${url}`;
+    try {
+      const res = await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
+      if (res?.isError) throw new Error("rejected");
+      setStatus("Uploaded ✓", "ok");
+    } catch {
+      setStatus("Uploaded ✓ — send any message to continue.", "ok");
+    }
+  }
+
+  const drop = $("drop");
+  $("file").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); if (uploadUrl && !busy) drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    upload(e.dataTransfer.files[0]);
+  });
+  $("copy").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("url").value);
+      $("copy").textContent = "Copied";
+      setTimeout(() => { $("copy").textContent = "Copy"; }, 1500);
+    } catch {
+      $("url").select();
+    }
+  });
+
+  if (embedded) {
+    try {
+      const { App } = await import(SDK_URL);
+      app = new App({ name: "Xelta Upload", version: "1.0.0" });
+      app.ontoolresult = onToolResult;
+      app.onhostcontextchanged = applyTheme;
+      await app.connect();
+      applyTheme(app.getHostContext());
+    } catch (e) {
+      setStatus(`Couldn't start the upload box: ${e.message}`, "err");
+    }
+  } else {
+    // Opened directly from the fallback link: the token is in this page's URL
+    // and the upload goes back to the same address.
+    document.body.classList.add("standalone");
+    if (new URLSearchParams(location.search).get("token")) ready(location.href);
+    else setStatus("This upload link is incomplete — ask for a new one.", "err");
+  }
+</script>
+</body>
+</html>

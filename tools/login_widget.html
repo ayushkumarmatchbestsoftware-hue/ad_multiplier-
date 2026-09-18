@@ -4,97 +4,186 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Sign in to Xelta</title>
+<title>Connect to Xelta</title>
 <style>
-  :root { --fg: #1f1f1f; --muted: #6b6b6b; --border: #d9d9d9; --accent: #2563eb; --surface: #f5f5f5; --ok: #15803d; --err: #b91c1c; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) { --fg: #ececec; --muted: #a3a3a3; --border: #3f3f3f; --accent: #60a5fa; --surface: #262626; --ok: #4ade80; --err: #f87171; }
+  :root {
+    --fg: #1c1917; --muted: #6b645e; --border: #e7e1dc; --surface: #ffffff;
+    --brand: #d9542b; --brand-hover: #c2461f; --brand-soft: rgba(217, 84, 43, .10);
+    --ok: #15803d; --err: #b91c1c;
   }
-  :root[data-theme="dark"] { --fg: #ececec; --muted: #a3a3a3; --border: #3f3f3f; --accent: #60a5fa; --surface: #262626; --ok: #4ade80; --err: #f87171; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fg: #f1ece8; --muted: #a8a09a; --border: #3a3431; --surface: #211d1b;
+      --brand: #e3602f; --brand-hover: #f0713f; --brand-soft: rgba(227, 96, 47, .16);
+      --ok: #4ade80; --err: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fg: #f1ece8; --muted: #a8a09a; --border: #3a3431; --surface: #211d1b;
+    --brand: #e3602f; --brand-hover: #f0713f; --brand-soft: rgba(227, 96, 47, .16);
+    --ok: #4ade80; --err: #f87171;
+  }
   [hidden] { display: none !important; }
   html, body { margin: 0; background: transparent; color: var(--fg); }
   body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .box { box-sizing: border-box; max-width: 440px; margin: 8px 2px; padding: 14px 16px;
-         border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-  h2 { margin: 0 0 4px; font-size: 15px; }
-  p { margin: 0; color: var(--muted); font-size: 13px; }
-  .row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-  button { font: inherit; padding: 7px 14px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
-  button:disabled { opacity: .55; cursor: default; }
-  .status { font-size: 12.5px; color: var(--muted); }
-  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
-  .fallback { margin-top: 10px; font-size: 12px; word-break: break-all; }
-  .fallback a { color: var(--accent); }
+
+  .card { box-sizing: border-box; max-width: 460px; margin: 6px 2px; padding: 16px;
+          border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 40px; height: 40px; flex: none; }
+  .text { min-width: 0; }
+  h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 14px; }
+  .actions:not(:has(button:not([hidden]))) { display: none; }
+  button { font: inherit; cursor: pointer; }
+  .primary { padding: 8px 16px; border: 0; border-radius: 9px; background: var(--brand); color: #fff;
+             font-weight: 600; font-size: 13.5px; }
+  .primary:hover { background: var(--brand-hover); }
+  .primary:focus-visible, .link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .link { padding: 4px 0; border: 0; background: none; color: var(--muted); font-size: 13px; }
+  .link:hover { color: var(--brand); }
+
+  .spinner { width: 14px; height: 14px; flex: none; border-radius: 50%;
+             border: 2px solid var(--brand-soft); border-top-color: var(--brand); animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+  .check { color: var(--ok); }
+
+  /* Signed-in is a confirmation, not a prompt: keep it small. */
+  .card[data-state="connected"] { padding: 10px 14px; }
+  .card[data-state="connected"] .logo { width: 28px; height: 28px; }
+  .card[data-state="connected"] h2 { font-size: 14px; }
+  .card[data-state="connected"] .head { gap: 10px; }
+  .card[data-state="connected"] .actions { margin: 0 0 0 auto; }
+  .card[data-state="connected"] .row { display: flex; align-items: center; gap: 10px; }
+  .card[data-state="error"] h2, .card[data-state="expired"] h2 { color: var(--err); }
+
+  .fallback { margin: 10px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .fallback a { color: var(--brand); }
 </style>
 </head>
 <body>
-<div class="box">
-  <h2 id="title">Sign in to Xelta</h2>
-  <p id="sub">Connect your Xelta account to create images and videos.</p>
-  <div class="row" id="row">
-    <button id="go" disabled>Sign in</button>
-    <span class="status" id="status">Connecting…</span>
+<div class="card" id="card" data-state="checking">
+  <div class="row">
+    <div class="head">
+      <img class="logo" src="{{XELTA_LOGO}}" alt="Xelta">
+      <div class="text">
+        <h2 id="title">Connect to Xelta</h2>
+        <p class="sub" id="sub">Checking your Xelta account…</p>
+      </div>
+    </div>
+    <div class="actions" id="actions">
+      <span class="spinner" id="spinner" hidden></span>
+      <button class="primary" id="go" hidden>Sign in with Xelta</button>
+      <button class="primary" id="retry" hidden>Try again</button>
+      <button class="link" id="again" hidden>Open sign-in page again</button>
+      <button class="link" id="cancel" hidden>Cancel</button>
+      <button class="link" id="switch" hidden>Switch account</button>
+    </div>
   </div>
-  <p class="fallback" id="fallback" hidden>If no browser window opened: <a id="link" target="_blank" rel="noopener"></a></p>
+  <p class="fallback" id="fallback" hidden>If no browser tab opened, open this link: <a id="link" target="_blank" rel="noopener"></a></p>
 </div>
 
 <script type="module">
   const SDK_URL = "https://unpkg.com/@modelcontextprotocol/ext-apps@2.0.0/app-with-deps";
   const POLL_MS = 3000;
-  const LIMIT_MS = 15 * 60 * 1000;   // the sign-in flow itself expires after ~15 minutes
+  const LIMIT_MS = 15 * 60 * 1000;   // Xelta's sign-in link expires after ~15 minutes
 
   const $ = (id) => document.getElementById(id);
-  let app = null, authUrl = "", timer = null, startedAt = 0, finished = false;
+  let app = null, authUrl = "", timer = null, waitingSince = 0, switching = false, announced = false;
 
-  function status(text, kind = "") { $("status").textContent = text; $("status").className = "status " + kind; }
+  // ── rendering ────────────────────────────────────────────────────────────────
+  const VIEWS = {
+    checking:  { title: "Connect to Xelta", sub: "Checking your Xelta account…", show: ["spinner"] },
+    signin:    { title: "Connect to Xelta",
+                 sub: "Sign in with your Xelta account to create images, videos and ad variants right here in Claude.",
+                 show: ["go"] },
+    waiting:   { title: "Finish signing in", sub: "Complete sign-in in the browser tab that opened. This updates by itself.",
+                 show: ["spinner", "again", "cancel"] },
+    connected: { title: "Connected to Xelta", sub: "", show: ["switch"] },
+    expired:   { title: "Sign-in link expired", sub: "Get a new link to try again.", show: ["retry"] },
+    error:     { title: "Couldn't reach Xelta", sub: "", show: ["retry"] },
+  };
 
-  function signedIn(state) {
-    finished = true;
-    clearTimeout(timer);
-    $("title").textContent = "Signed in to Xelta ✓";
-    $("sub").textContent = state.email ? `As ${state.email}` : "";
-    $("row").hidden = true; $("fallback").hidden = true;
+  function show(state, sub) {
+    const view = VIEWS[state];
+    $("card").dataset.state = state;
+    $("title").textContent = view.title;
+    $("sub").textContent = sub ?? view.sub;
+    for (const id of ["spinner", "go", "retry", "again", "cancel", "switch"]) $(id).hidden = !view.show.includes(id);
+    $("retry").textContent = state === "expired" ? "Get a new link" : "Try again";
+    if (state !== "waiting") $("fallback").hidden = true;
   }
 
-  function showLink(url) {
-    authUrl = url || authUrl;
-    $("link").href = authUrl; $("link").textContent = authUrl;
-    $("go").disabled = !authUrl;
-    status("");
+  function stopWaiting() { clearTimeout(timer); timer = null; waitingSince = 0; }
+
+  // ── xelta_login results ──────────────────────────────────────────────────────
+  // `fromPoll` is true only while the user is signing in through this card, so a
+  // card that opens already signed in never posts a chat message.
+  function apply(result, fromPoll = false) {
+    const s = (result && !result.isError && result.structuredContent) || null;
+    if (s && s.signed_in) {
+      stopWaiting();
+      show("connected", s.email ? `Signed in as ${s.email}` : "Signed in");
+      if (fromPoll && !announced) {
+        announced = true;
+        const text = switching && s.email ? `I've switched my Xelta account to ${s.email}.`
+                                          : "I've signed in to Xelta. Please continue.";
+        app.sendMessage({ role: "user", content: [{ type: "text", text }] }).catch(() => {});
+      }
+      switching = false;
+      return;
+    }
+    if (s && s.auth_url) {
+      authUrl = s.auth_url;
+      $("link").href = authUrl; $("link").textContent = authUrl;
+      if (!fromPoll) show("signin");
+      return;
+    }
+    stopWaiting();
+    const text = ((result && result.content) || []).map((c) => c.text || "").join(" ").trim();
+    show("error", (s && s.message) || text || "Try again in a moment.");
+  }
+
+  async function login(args = {}) {
+    show("checking");
+    try { apply(await app.callServerTool({ name: "xelta_login", arguments: args })); }
+    catch { show("error", "Try again in a moment."); }
   }
 
   // One non-blocking xelta_login step per tick; the tool never waits on the user.
   async function tick() {
-    if (finished) return;
-    if (Date.now() - startedAt > LIMIT_MS) { status("The sign-in link expired. Ask Claude to sign in again.", "err"); return; }
-    try {
-      const res = await app.callServerTool({ name: "xelta_login", arguments: {} });
-      const s = (res && !res.isError && res.structuredContent) || null;
-      if (s && s.signed_in) {
-        signedIn(s);
-        await app.sendMessage({ role: "user", content: [{ type: "text",
-          text: "I've signed in to Xelta. Please continue with my previous request." }] }).catch(() => {});
-        await app.requestTeardown().catch(() => {});
-        return;
-      }
-      if (s && s.auth_url) showLink(s.auth_url);
-    } catch { /* transient; keep waiting */ }
-    timer = setTimeout(tick, POLL_MS);
+    if (!waitingSince) return;
+    if (Date.now() - waitingSince > LIMIT_MS) { stopWaiting(); show("expired"); return; }
+    try { apply(await app.callServerTool({ name: "xelta_login", arguments: {} }), true); }
+    catch { /* transient; keep waiting */ }
+    if (waitingSince) timer = setTimeout(tick, POLL_MS);
   }
 
-  $("go").addEventListener("click", async () => {
+  async function openSignIn() {
     if (!authUrl) return;
-    const caps = app.getHostCapabilities() || {};
+    const caps = (app.getHostCapabilities && app.getHostCapabilities()) || {};
+    let opened = false;
     if (caps.openLinks) {
-      try { await app.openLink({ url: authUrl }); } catch { $("fallback").hidden = false; }
-    } else {
-      $("fallback").hidden = false;
+      try { await app.openLink({ url: authUrl }); opened = true; } catch { /* fall through to the link */ }
     }
-    $("go").disabled = true;
-    status("Waiting for you to finish signing in…");
-    if (!startedAt) { startedAt = Date.now(); tick(); }
-  });
+    $("fallback").hidden = opened;
+  }
 
+  // ── actions ──────────────────────────────────────────────────────────────────
+  $("go").addEventListener("click", async () => {
+    show("waiting");
+    await openSignIn();
+    if (!waitingSince) { waitingSince = Date.now(); timer = setTimeout(tick, POLL_MS); }
+  });
+  $("again").addEventListener("click", openSignIn);
+  $("cancel").addEventListener("click", () => { stopWaiting(); switching = false; show("signin"); });
+  $("retry").addEventListener("click", () => login());
+  $("switch").addEventListener("click", () => { switching = true; announced = false; login({ switch_account: true }); });
+
+  // ── host ─────────────────────────────────────────────────────────────────────
   function applyTheme(ctx) {
     if (ctx && (ctx.theme === "dark" || ctx.theme === "light")) document.documentElement.dataset.theme = ctx.theme;
   }
@@ -102,21 +191,16 @@
   if (window.parent !== window) {
     try {
       const { App } = await import(SDK_URL);
-      app = new App({ name: "Xelta Sign-in", version: "2.0.0" });
-      app.ontoolresult = (r) => {
-        const s = (r && r.structuredContent) || {};
-        if (s.signed_in) signedIn(s);
-        else if (s.auth_url) showLink(s.auth_url);
-        else status((r && r.content && r.content[0] && r.content[0].text) || "Couldn't start sign-in.", "err");
-      };
+      app = new App({ name: "Xelta Sign-in", version: "2.1.0" });
+      app.ontoolresult = (r) => apply(r);
       app.onhostcontextchanged = applyTheme;
       await app.connect();
       applyTheme(app.getHostContext());
-    } catch (e) {
-      status(`Couldn't start sign-in: ${e.message}`, "err");
+    } catch {
+      show("error", "Couldn't load the sign-in card. Ask Claude to sign in to Xelta again.");
     }
   } else {
-    status("Open this from Claude.", "err");
+    show("error", "Open this from Claude.");
   }
 </script>
 </body>

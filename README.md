@@ -29,7 +29,8 @@ sign-in and live results.
   fills in as jobs complete.
 - **Non-blocking jobs:** tools return job ids immediately. Results are recovered
   from storage if the API gateway cuts a request off at 29 s or the server restarts.
-- **Xelta account sign-in** through a browser session. No tokens to copy.
+- **Xelta account sign-in** through a browser session, prompted automatically
+  before the first Xelta action. No tokens to copy.
 
 ## How it works
 
@@ -106,8 +107,10 @@ Generation widget ──polls job_status──▶ result shown in the chat (new 
    (`mcp-server-xelta.log`) shows the upload listener and
    `[xelta] video conversion: <path to ffmpeg>`.
 
-6. **Sign in:** ask Claude to *"sign me in to Xelta"*. Any tool that needs an
-   account also shows the sign-in box when you aren't signed in.
+6. **Sign in:** start a chat. Before the first Xelta action, Claude shows a
+   **Sign in with Xelta** card. Click it, finish signing in in the browser tab that
+   opens, and the card switches to *Connected to Xelta*, then Claude carries on with
+   your request. The sign-in is saved on this computer, so later chats skip this step.
 
 ## Example prompts
 
@@ -188,8 +191,9 @@ docker compose up -d --build     # expects .env and the external cloudflare_net 
 │   ├── image_gen.py           # Schema-driven image generation
 │   ├── creation_recovery.py   # Recover results cut off by the API gateway
 │   ├── xelta_session.py       # Browser-session sign-in
-│   ├── widgets.py             # Widget resources and CSP
-│   └── *_widget.html          # Upload, sign-in and results widgets
+│   ├── widgets.py             # Widget resources, CSP and the inlined logo
+│   ├── *_widget.html          # Upload, sign-in and results widgets
+│   └── assets/xelta-logo.png  # Server icon and sign-in card logo
 └── tests/
 ```
 

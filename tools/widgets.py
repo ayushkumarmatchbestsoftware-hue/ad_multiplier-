@@ -9,6 +9,7 @@ Each widget calls server tools through the host (callServerTool), so the only
 direct network access any of them needs is the upload PUT and loading media.
 """
 
+import base64
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -22,9 +23,23 @@ UPLOAD_URI = "ui://xelta/upload.html"
 GENERATION_URI = "ui://xelta/generation.html"
 LOGIN_URI = "ui://xelta/login.html"
 
+# Inlined as a data URI: widgets can't load files from this server, and the logo
+# is small enough (8 KB) that shipping it with the HTML is simplest.
+LOGO_PNG = _HERE / "assets" / "xelta-logo.png"
+LOGO_DATA_URI = "data:image/png;base64," + base64.b64encode(LOGO_PNG.read_bytes()).decode()
+# The same logo as xelta.ai publishes it. Hosts that draw a server icon may only
+# load https images, so it's listed first, with the inline copy as a fallback.
+LOGO_URL = "https://xelta.ai/icons/apple-touch-icon.png"
+
+
+def server_icons() -> list:
+    from mcp.types import Icon
+    return [Icon(src=LOGO_URL, mimeType="image/png", sizes=["180x180"]),
+            Icon(src=LOGO_DATA_URI, mimeType="image/png", sizes=["90x90"])]
+
 UPLOAD_HTML = (_HERE / "upload_widget.html").read_text(encoding="utf-8")
 GENERATION_HTML = (_HERE / "generation_widget.html").read_text(encoding="utf-8")
-LOGIN_HTML = (_HERE / "login_widget.html").read_text(encoding="utf-8")
+LOGIN_HTML = (_HERE / "login_widget.html").read_text(encoding="utf-8").replace("{{XELTA_LOGO}}", LOGO_DATA_URI)
 
 
 def _origin(url: str) -> str:

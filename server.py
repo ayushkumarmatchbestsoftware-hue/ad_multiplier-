@@ -40,6 +40,7 @@ from tools.media_upload import (
     upload_media as _upload_media,
 )
 from tools.utils import format_tool_error
+from tools.widgets import server_icons
 
 
 # ── ASGI middleware: normalize grant_types on POST /register ─────────────────
@@ -162,6 +163,8 @@ async def lifespan(app: FastMCP) -> AsyncGenerator[None, None]:
 
 mcp = FastMCP(
     "xelta",
+    website_url="https://www.xelta.ai",
+    icons=server_icons(),
     host="0.0.0.0",
     port=8000,
     auth_server_provider=provider,

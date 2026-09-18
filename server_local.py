@@ -37,9 +37,33 @@ from tools.media_library import MediaError
 from tools.media_upload import _current_user_id
 from tools.reel_creator import create_reel as _create_reel
 from tools.utils import format_tool_error
-from tools.xelta_session import login_step as _login_step, logout as _xelta_logout
+from tools.xelta_session import current_identity, login_step as _login_step, logout as _xelta_logout
 
-mcp = FastMCP("xelta")
+
+def _instructions() -> str:
+    """Sent once when a client connects. Hosts that read it get sign-in up front;
+    the xelta_login description and every tool's recovery_tool cover hosts that don't."""
+    usage = (
+        "Xelta creates images, videos and ad variants. Media are passed as media_ids, never "
+        "URLs: for the user's own file call media_upload_widget first. Generation tools "
+        "return at once and a widget shows the result as it finishes."
+    )
+    if current_identity():
+        return usage
+    return (
+        "The user hasn't connected their Xelta account on this computer yet. At the start of "
+        "the conversation, before replying to the user's first message, call xelta_login "
+        "(no arguments, without asking) so the sign-in card appears. After they sign in, "
+        "carry on with what they asked. " + usage
+    )
+
+
+mcp = FastMCP(
+    "xelta",
+    instructions=_instructions(),
+    website_url="https://www.xelta.ai",
+    icons=widgets.server_icons(),
+)
 
 
 # ── Loopback upload listener ──────────────────────────────────────────────────
@@ -144,12 +168,17 @@ async def check_balance() -> CallToolResult:
 )
 async def xelta_login(switch_account: bool = False) -> CallToolResult:
     """
-    Sign in to Xelta. Shows a sign-in widget with a button; it waits for the user
-    in the background and sends "I've signed in" when done — so after calling
-    this, stop and wait for that message. Don't call it repeatedly yourself.
+    Connect the user's Xelta account. Every other Xelta tool needs it.
 
-    Call it immediately (without asking first) whenever a tool reports
-    recovery_tool "xelta_login".
+    Call this FIRST, without asking, when the user wants to create anything with Xelta
+    (images, videos, ad variants, uploads, credits) and hasn't signed in during this
+    conversation, and immediately whenever a tool reports recovery_tool "xelta_login".
+    If they're already signed in it returns at once with the account, so calling it
+    is always safe.
+
+    When not signed in it shows a "Sign in with Xelta" card. The card waits for the
+    user and posts "I've signed in to Xelta" when done: stop after calling this, and
+    don't call it again or ask the user to paste anything.
 
     Args:
         switch_account: Sign out first so the user can pick a different account.
@@ -159,10 +188,12 @@ async def xelta_login(switch_account: bool = False) -> CallToolResult:
     except Exception as e:
         return _error(e)
     if step["signed_in"]:
-        return _ok(step["message"], step)
+        return _ok(f"{step['message']} Carry on with the user's request; no need to call "
+                   "xelta_login again in this conversation.", step)
     return _ok(
-        "A sign-in button is showing. Wait for the user — the widget sends a message when "
-        "sign-in completes. Don't call xelta_login again or ask them to paste anything.",
+        "The Xelta sign-in card is showing. In one short sentence, ask the user to click "
+        "\"Sign in with Xelta\", then stop and wait: the card posts a message when sign-in "
+        "completes.",
         step,
     )
 
@@ -197,7 +228,8 @@ async def media_upload_widget(type: str = "auto", multiple: bool = False, max_fi
     confirmed media_id. Stop after calling this and wait for that message.
 
     Before calling, check whether the file already exists: if the user refers to
-    something uploaded or generated earlier, use show_medias instead.
+    something uploaded or generated earlier, use show_medias instead. Needs Xelta
+    sign-in: if this returns recovery_tool "xelta_login", call that first.
 
     Args:
         type: 'image', 'video' or 'auto'.
@@ -206,6 +238,11 @@ async def media_upload_widget(type: str = "auto", multiple: bool = False, max_fi
         min_files: Fewest confirmed files before Continue is enabled.
         label: Optional short heading, e.g. "Upload the ad to multiply".
     """
+    try:
+        # Sign in before the upload box, not after the user has picked a file.
+        _user()
+    except Exception as e:
+        return _error(e)
     return _ok(
         "An upload box is showing. Wait for the user — a message with the confirmed "
         "media_id arrives when the upload finishes.",

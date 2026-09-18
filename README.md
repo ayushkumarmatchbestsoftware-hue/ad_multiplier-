@@ -25,8 +25,13 @@ sign-in and live results.
   Each clip is converted once and the copy is reused.
 - **Image generation and editing** (`generate_image`) with any Xelta image model.
   Requests are built from each model's own input schema.
-- **In-chat widgets:** an upload box, a Xelta sign-in box, and a results grid that
-  fills in as jobs complete.
+- **Video length choice:** Kling returns as much video as it's given, so for clips
+  longer than about 5 s Claude first asks how long the result should be (5 s or
+  10 s, or the whole clip), with buttons in the chat. Clips are trimmed to that length.
+- **In-chat widgets:** an upload box, a Xelta sign-in card, and result cards in the
+  style of Higgsfield: the prompt (with *Show more*), chips for model, aspect, length
+  and audio, the player, then **Download** (saves the file) and **Recreate** (asks
+  before spending credits again).
 - **Non-blocking jobs:** tools return job ids immediately. Results are recovered
   from storage if the API gateway cuts a request off at 29 s or the server restarts.
 - **Xelta account sign-in** through a browser session, prompted automatically
@@ -120,6 +125,8 @@ change his shirt to a red hoodie
 put him on a beach at sunset
 make it night time with neon lights
 
+Make a 10 second version where the background is a snowy street
+
 Edit this photo so it's snowing
 
 Check my Xelta credits
@@ -134,6 +141,8 @@ Check my Xelta credits
 | `multiply_ad` | Several edited variants of one image or video ad; one job per edit |
 | `generate_image` | Generate an image, or edit one passed as a `media_id` |
 | `job_status` | Status and result of a generation job (the widget polls this) |
+| `job_recreate` | Run a result again with the same inputs (the card's Recreate button) |
+| `media_download` | One-hour download link for a result (the card's Download button; hidden from Claude) |
 | `media_upload_widget` | Show the upload box; the user's file comes back as a `media_id` |
 | `media_upload` / `media_confirm` | Upload protocol used by the widget |
 | `media_import_url` | Import an image or video from a public https URL |

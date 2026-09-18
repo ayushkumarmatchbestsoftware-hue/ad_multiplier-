@@ -38,7 +38,7 @@ def server_icons() -> list:
             Icon(src=LOGO_DATA_URI, mimeType="image/png", sizes=["90x90"])]
 
 UPLOAD_HTML = (_HERE / "upload_widget.html").read_text(encoding="utf-8")
-GENERATION_HTML = (_HERE / "generation_widget.html").read_text(encoding="utf-8")
+GENERATION_HTML = (_HERE / "generation_widget.html").read_text(encoding="utf-8").replace("{{XELTA_LOGO}}", LOGO_DATA_URI)
 LOGIN_HTML = (_HERE / "login_widget.html").read_text(encoding="utf-8").replace("{{XELTA_LOGO}}", LOGO_DATA_URI)
 
 

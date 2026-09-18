@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 
@@ -205,6 +206,8 @@ class Plan:
     hold_seconds: float         # last frame held this long to reach the minimum
     encode: bool
     changes: list[str] = field(default_factory=list)
+    source_seconds: float = 0.0
+    audio: bool = False
 
     @property
     def key(self) -> str:
@@ -234,6 +237,11 @@ def make_plan(info: Probe, limits: dict, label: str = "the model") -> Plan:
     min_fps, max_fps = float(limits.get("min_fps") or 0), float(limits.get("max_fps") or 0)
     min_s, max_s = float(limits.get("min_seconds") or 0), float(limits.get("max_seconds") or 0)
     max_mb = float(limits.get("max_mb") or 0)
+    # A length the user picked, within the model's own range.
+    chosen = float(limits.get("chosen_seconds") or 0)
+    by_choice = bool(chosen and (not max_s or chosen < max_s))
+    if by_choice:
+        max_s = max(chosen, min_s)
 
     if info.width < 16 or info.height < 16:
         raise VideoPrepError("That video has no usable picture.")
@@ -277,7 +285,8 @@ def make_plan(info: Probe, limits: dict, label: str = "the model") -> Plan:
     seconds, hold = info.duration, 0.0
     if max_s and info.duration > max_s + 0.04:
         seconds = max_s
-        changes.append(f"trimmed to the first {max_s:g}s ({label} accepts at most {max_s:g}s; the clip is {info.duration:.1f}s)")
+        changes.append(f"trimmed to the first {max_s:g}s of the {info.duration:.1f}s clip, as chosen" if by_choice
+                       else f"trimmed to the first {max_s:g}s ({label} accepts at most {max_s:g}s; the clip is {info.duration:.1f}s)")
     elif min_s and info.duration < min_s:
         seconds = min_s + 0.1
         hold = seconds - info.duration
@@ -301,7 +310,38 @@ def make_plan(info: Probe, limits: dict, label: str = "the model") -> Plan:
     encode = bool(changes)
     return Plan(width=fw, height=fh, scaled_width=sw, scaled_height=sh, fps=fps,
                 seconds=round(seconds, 3), hold_seconds=round(hold, 3), encode=encode,
-                changes=changes)
+                changes=changes, source_seconds=info.duration, audio=info.has_audio)
+
+
+def duration_options(source_seconds: float, limits: dict) -> list[int]:
+    """Lengths worth offering for a clip, or [] when there's nothing to choose.
+
+    The model edits what it's given and returns the same length, so the choice is
+    how much of the clip to use. Up to ~5s there's one sensible answer (all of it);
+    past that, a short cut or as much as the model takes.
+    """
+    top = float(limits.get("max_seconds") or 0)
+    usable = min(source_seconds, top) if top else source_seconds
+    if usable <= 5.5:
+        return []
+    longest = int(top) if top and source_seconds > top + 0.05 else int(round(usable))
+    return [5, longest] if longest > 5 else []
+
+
+_ASPECTS = {"1:1": 1.0, "16:9": 16 / 9, "9:16": 9 / 16, "4:5": 4 / 5, "5:4": 5 / 4, "4:3": 4 / 3,
+            "3:4": 3 / 4, "3:2": 3 / 2, "2:3": 2 / 3, "21:9": 21 / 9}
+
+
+def aspect_label(width: int, height: int) -> str:
+    """'9:16' for 720x1280 and friends; the reduced ratio when no common one is close."""
+    if not (width and height):
+        return ""
+    ratio = width / height
+    name, value = min(_ASPECTS.items(), key=lambda kv: abs(math.log(ratio / kv[1])))
+    if abs(ratio / value - 1) < 0.03:
+        return name
+    frac = Fraction(width, height).limit_denominator(16)
+    return f"{frac.numerator}:{frac.denominator}"
 
 
 # ── encode ────────────────────────────────────────────────────────────────────
@@ -404,22 +444,35 @@ class Prepared:
     height: int
     seconds: float
     changes: list[str]
+    audio: bool = False
 
 
 _locks: dict[str, asyncio.Lock] = {}
 
 
-def limits_for(engine: dict) -> dict:
-    return engine.get("input") or {}
+def limits_for(engine: dict, seconds: float = 0) -> dict:
+    """The engine's input limits, narrowed to a user-chosen length when given."""
+    limits = dict(engine.get("input") or {})
+    if seconds:
+        limits["chosen_seconds"] = seconds
+    return limits
 
 
-async def check(entry: dict, engine: dict) -> Plan:
-    """Fast preflight (probe only): the plan for this clip, or VideoPrepError."""
-    info = await asyncio.to_thread(probe, entry["url"])
-    plan = make_plan(info, limits_for(engine), engine.get("label", "the model"))
+async def inspect(entry: dict) -> Probe:
+    return await asyncio.to_thread(probe, entry["url"])
+
+
+def plan_for(info: Probe, engine: dict, seconds: float = 0) -> Plan:
+    """The plan for this clip and length, or VideoPrepError if it can't be made to fit."""
+    plan = make_plan(info, limits_for(engine, seconds), engine.get("label", "the model"))
     if plan.encode and not ffmpeg_paths():
         raise VideoPrepError("This clip needs converting first, but ffmpeg isn't installed on this computer.")
     return plan
+
+
+async def check(entry: dict, engine: dict, seconds: float = 0) -> Plan:
+    """Fast preflight (probe only): the plan for this clip, or VideoPrepError."""
+    return plan_for(await inspect(entry), engine, seconds)
 
 
 async def _download(url: str, path: str) -> None:
@@ -438,20 +491,21 @@ def _r2_put(key: str, path: str) -> None:
         _r2().put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=f, ContentType="video/mp4")
 
 
-async def prepare(user_id: str, media_id: str, engine: dict, on_convert=None) -> Prepared:
+async def prepare(user_id: str, media_id: str, engine: dict, on_convert=None, seconds: float = 0) -> Prepared:
     """The source clip as `engine` accepts it — the original when it already fits.
 
+    `seconds` is a length the user chose (0 = as much as the model takes).
     `on_convert(plan)` is called once, just before a real encode starts, so the
     job can say what's happening.
     """
     entry = library.get(user_id, media_id)
     if not entry:
         raise VideoPrepError("The source video is no longer in your library. Upload it again.")
-    limits = limits_for(engine)
+    limits = limits_for(engine, seconds)
     info = await asyncio.to_thread(probe, entry["url"])
     plan = make_plan(info, limits, engine.get("label", "the model"))
     if not plan.encode:
-        return Prepared(entry["url"], info.width, info.height, info.duration, [])
+        return Prepared(entry["url"], info.width, info.height, info.duration, [], info.has_audio)
 
     if on_convert:
         # Before the lock, so a variant waiting on another's encode says why too.
@@ -460,7 +514,8 @@ async def prepare(user_id: str, media_id: str, engine: dict, on_convert=None) ->
     async with lock:
         cached = ((library.get(user_id, media_id) or {}).get("prepared") or {}).get(plan.key)
         if cached:
-            return Prepared(cached["url"], cached["width"], cached["height"], cached["seconds"], plan.changes)
+            return Prepared(cached["url"], cached["width"], cached["height"], cached["seconds"],
+                            plan.changes, info.has_audio)
 
         print(f"[video_prep] {media_id} -> {plan.key}: {plan.summary()}", file=sys.stderr, flush=True)
         with tempfile.TemporaryDirectory(prefix="xelta-prep-") as tmp:
@@ -468,8 +523,10 @@ async def prepare(user_id: str, media_id: str, engine: dict, on_convert=None) ->
             dst = os.path.join(tmp, "prepared.mp4")
             await _download(entry["url"], src)
             result = await asyncio.to_thread(convert_file, src, dst, info, plan, limits)
-            # Same folder as the original upload.
-            key = f"{R2_UPLOAD_PREFIX}/u/{user_id}/src/{media_id}_{plan.width}x{plan.height}_{math.ceil(plan.fps)}fps.mp4"
+            # Same folder as the original upload. The length is in the name, so a 5s
+            # and a 10s cut of one clip never overwrite each other.
+            key = (f"{R2_UPLOAD_PREFIX}/u/{user_id}/src/{media_id}_{plan.width}x{plan.height}"
+                   f"_{math.ceil(plan.fps)}fps_{plan.seconds:g}s.mp4")
             try:
                 await asyncio.to_thread(_r2_put, key, dst)
             except Exception as e:
@@ -480,7 +537,8 @@ async def prepare(user_id: str, media_id: str, engine: dict, on_convert=None) ->
                     "height": result.height, "seconds": round(result.duration, 3),
                     "size": result.size_bytes, "changes": plan.changes}
         library.set_prepared(user_id, media_id, plan.key, prepared)
-        return Prepared(prepared["url"], result.width, result.height, prepared["seconds"], plan.changes)
+        return Prepared(prepared["url"], result.width, result.height, prepared["seconds"],
+                        plan.changes, info.has_audio)
 
 
 # ── intake ────────────────────────────────────────────────────────────────────

@@ -4,58 +4,95 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Xelta generation</title>
+<title>Xelta results</title>
 <style>
   :root {
-    --fg: #1f1f1f; --muted: #6b6b6b; --border: #e2e2e2; --accent: #2563eb;
-    --surface: #f4f4f4; --err: #b91c1c; --chip: rgba(0,0,0,.62);
+    --fg: #1c1917; --muted: #6b645e; --border: #e7e1dc; --surface: #ffffff; --raised: #f6f3f1;
+    --stage: #0f0d0c; --brand: #d9542b; --brand-hover: #c2461f; --brand-soft: rgba(217, 84, 43, .10);
+    --err: #b91c1c;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --fg: #ececec; --muted: #a3a3a3; --border: #3a3a3a; --accent: #60a5fa;
-      --surface: #262626; --err: #f87171;
+      --fg: #f1ece8; --muted: #a8a09a; --border: #3a3431; --surface: #1d1a18; --raised: #292421;
+      --brand: #e3602f; --brand-hover: #f0713f; --brand-soft: rgba(227, 96, 47, .16); --err: #f87171;
     }
   }
   :root[data-theme="dark"] {
-    --fg: #ececec; --muted: #a3a3a3; --border: #3a3a3a; --accent: #60a5fa;
-    --surface: #262626; --err: #f87171;
+    --fg: #f1ece8; --muted: #a8a09a; --border: #3a3431; --surface: #1d1a18; --raised: #292421;
+    --brand: #e3602f; --brand-hover: #f0713f; --brand-soft: rgba(227, 96, 47, .16); --err: #f87171;
   }
   [hidden] { display: none !important; }
   html, body { margin: 0; background: transparent; color: var(--fg); }
   body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; cursor: pointer; }
   .wrap { box-sizing: border-box; padding: 4px 0 8px; }
   .standalone .wrap { max-width: 720px; margin: 24px auto; padding-inline: 16px; }
   .status { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); }
 
-  /* align-items: start so a tall portrait video doesn't stretch its row-mates. */
-  .grid { display: grid; gap: 10px; align-items: start; }
-  .grid.many { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .grid { display: grid; gap: 12px; align-items: start; }
   .grid.one { max-width: 560px; }
+  .grid.many { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 
-  .card { position: relative; overflow: hidden; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
-  .media { display: block; width: 100%; height: auto; background: var(--surface); }
-  .grid.many .media { max-height: 300px; object-fit: contain; }
+  .card { overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+
+  /* Prompt and chips above the media, as in Higgsfield's result card. */
+  .info { padding: 12px 14px 10px; }
+  .prompt { margin: 0; font-size: 13px; color: var(--fg); overflow-wrap: anywhere;
+            display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .prompt.open { display: block; }
+  .more { margin: 2px 0 0; padding: 0; border: 0; background: none; color: var(--muted); font-size: 12.5px; }
+  .more:hover { color: var(--brand); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+          background: var(--raised); color: var(--muted); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+  .chip svg { width: 12px; height: 12px; flex: none; }
+  .chip.label { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+
+  .stage { display: flex; justify-content: center; background: var(--stage); }
+  .media { display: block; width: 100%; max-height: 480px; object-fit: contain; background: var(--stage); }
+  .grid.many .media { max-height: 360px; }
   img.media { cursor: zoom-in; }
-  .chip { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px;
-          font-size: 11.5px; font-weight: 600; background: var(--chip); color: #fff; }
-  .foot { display: flex; align-items: center; gap: 8px; padding: 7px 10px 9px; }
-  .caption { flex: 1; min-width: 0; margin: 0; font-size: 12.5px; color: var(--muted);
-             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .act { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
-         border: 1px solid var(--border); background: transparent; color: var(--fg); }
-  .act:hover { border-color: var(--accent); color: var(--accent); }
 
-  .placeholder { aspect-ratio: 1 / 1; display: flex; flex-direction: column; align-items: center;
-                 justify-content: center; gap: 6px; padding: 16px; text-align: center; box-sizing: border-box; }
+  .placeholder { box-sizing: border-box; width: 100%; max-height: 420px; min-height: 180px; display: flex;
+                 flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 18px;
+                 text-align: center; background: var(--raised); }
   .pending .placeholder {
-    background: linear-gradient(100deg, var(--surface) 30%, var(--border) 50%, var(--surface) 70%);
+    background: linear-gradient(100deg, var(--raised) 30%, var(--border) 50%, var(--raised) 70%);
     background-size: 300% 100%; animation: shimmer 1.6s ease-in-out infinite;
   }
   @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
   @media (prefers-reduced-motion: reduce) { .pending .placeholder { animation: none; } }
   .placeholder strong { font-weight: 600; }
-  .placeholder span { font-size: 12px; color: var(--muted); }
+  .placeholder span { font-size: 12px; color: var(--muted); max-width: 420px; }
   .failed .placeholder strong { color: var(--err); }
+
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px 12px; }
+  .actions:empty { display: none; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 9px;
+         border: 1px solid var(--border); background: transparent; color: var(--fg); font-size: 12.5px; font-weight: 500; }
+  .btn:hover { border-color: var(--brand); color: var(--brand); }
+  .btn.primary { border-color: var(--brand); background: var(--brand); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--brand-hover); color: #fff; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn svg { width: 14px; height: 14px; flex: none; }
+  .btn:focus-visible, .more:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .note { font-size: 12px; color: var(--err); }
+
+  /* "How long?" before a video starts. */
+  .choice { padding: 16px; max-width: 460px; }
+  .choice-head { display: flex; align-items: center; gap: 10px; }
+  .choice-head img { width: 32px; height: 32px; flex: none; }
+  .choice h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .choice p { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+  .options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .opt { padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--raised);
+         color: var(--fg); text-align: left; min-width: 130px; }
+  .opt strong { display: block; font-size: 14px; }
+  .opt span { font-size: 12px; color: var(--muted); }
+  .opt:hover { border-color: var(--brand); }
+  .opt.picked { border-color: var(--brand); background: var(--brand-soft); }
+  .opt:disabled:not(.picked) { opacity: .5; cursor: default; }
 </style>
 </head>
 <body>
@@ -66,104 +103,202 @@
 
 <script type="module">
   const SDK_URL = "https://unpkg.com/@modelcontextprotocol/ext-apps@2.0.0/app-with-deps";
+  const LOGO = "{{XELTA_LOGO}}";
   const LIMIT_MS = 30 * 60 * 1000;   // Kling runs 2-5 min; past this it's stuck, not slow
   const MAX_TRANSIENT = 6;           // same retry budget as Higgsfield's widget
 
   const $ = (id) => document.getElementById(id);
   let app = null;
   let jobs = [];
+  let choice = null;
+  let picked = 0;
   const started = Date.now();
   const timers = new Map();
   const transient = new Map();
   const reported = new Set();
+  const confirming = new Set();      // job_ids showing the "use credits again?" prompt
+  const errors = new Map();          // job_id -> message from a failed action
 
   const caps = () => (app && app.getHostCapabilities ? app.getHostCapabilities() || {} : {});
   const terminal = (j) => j.status === "completed" || j.status === "failed";
 
+  const ICONS = {
+    model: '<path d="M8 1.5l1.6 3.9 3.9 1.6-3.9 1.6L8 12.5 6.4 8.6 2.5 7l3.9-1.6z"/>',
+    aspect: '<rect x="2.5" y="4" width="11" height="8" rx="1.5"/>',
+    time: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/>',
+    audio: '<path d="M3 6.5h2L8 4v8L5 9.5H3z"/><path d="M10.5 6a2.5 2.5 0 0 1 0 4M12 4.5a4.5 4.5 0 0 1 0 7"/>',
+    download: '<path d="M8 2.5v8M4.5 7L8 10.5 11.5 7M3 13.5h10"/>',
+    again: '<path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3"/>',
+    edit: '<path d="M10.5 2.5l3 3L6 13H3v-3z"/>',
+  };
+  const icon = (name) => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+  function el(tag, cls, html) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (html !== undefined) node.innerHTML = html;
+    return node;
+  }
+  function text(tag, cls, value) { const node = el(tag, cls); node.textContent = value; return node; }
+
   function openExternal(url) {
+    if (!url) return;
     if (app && caps().openLinks) app.openLink({ url }).catch(() => {});
     else window.open(url, "_blank");
   }
 
-  function say(text) {
-    if (app) app.sendMessage({ role: "user", content: [{ type: "text", text }] }).catch(() => {});
+  function say(message) {
+    if (app) app.sendMessage({ role: "user", content: [{ type: "text", text: message }] }).catch(() => {});
   }
 
-  function mediaEl(result, job) {
+  function tellModel(message) {
+    if (app && caps().updateModelContext) app.updateModelContext({ content: [{ type: "text", text: message }] }).catch(() => {});
+  }
+
+  // ── card pieces ──────────────────────────────────────────────────────────────
+  function chips(job, many) {
+    const m = job.meta || {};
+    const row = el("div", "chips");
+    if (many && job.label) row.appendChild(text("span", "chip label", job.label));
+    const add = (name, value) => { if (value) row.appendChild(el("span", "chip", `${icon(name)}<span></span>`)).lastChild.textContent = value; };
+    add("model", m.model);
+    add("aspect", m.aspect);
+    if (job.type === "video") {
+      add("time", m.seconds ? `${m.seconds}s` : "");
+      add("audio", m.audio ? "Audio" : "");
+    }
+    return row;
+  }
+
+  function info(job, many) {
+    const box = el("div", "info");
+    if (job.caption) {
+      const p = text("p", "prompt", job.caption);
+      const more = text("button", "more", "Show more");
+      more.hidden = true;
+      more.onclick = () => { const open = p.classList.toggle("open"); more.textContent = open ? "Show less" : "Show more"; };
+      box.append(p, more);
+      // Only offer "Show more" when the prompt is actually cut off.
+      requestAnimationFrame(() => { more.hidden = p.scrollHeight <= p.clientHeight + 1 && !p.classList.contains("open"); });
+    }
+    box.appendChild(chips(job, many));
+    return box;
+  }
+
+  function media(result, job) {
     if (result.type === "video") {
-      const v = document.createElement("video");
-      v.className = "media"; v.src = result.url + "#t=0.1"; v.controls = true;
-      v.playsInline = true; v.preload = "metadata";
+      const v = el("video", "media");
+      v.src = result.url + "#t=0.1"; v.controls = true; v.playsInline = true; v.preload = "metadata";
       return v;
     }
-    const img = document.createElement("img");
-    img.className = "media"; img.src = result.url; img.loading = "lazy";
-    img.alt = job.caption || "Generated image";
+    const img = el("img", "media");
+    img.src = result.url; img.loading = "lazy"; img.alt = job.caption || "Generated image";
     img.onclick = () => openExternal(result.url);
     return img;
   }
 
   function placeholder(job) {
-    const box = document.createElement("div");
-    box.className = "placeholder";
-    const title = document.createElement("strong");
-    const sub = document.createElement("span");
+    const box = el("div", "placeholder");
+    const ratio = /^(\d+):(\d+)$/.exec((job.meta || {}).aspect || "");
+    if (ratio) box.style.aspectRatio = `${ratio[1]} / ${ratio[2]}`;
+    let title, sub;
     if (job.status === "failed") {
-      title.textContent = "Couldn't create this one";
-      sub.textContent = job.error || "Try again in a moment.";
-      box.append(title, sub);
-      if (job.recovery_tool === "xelta_login") {
-        const b = document.createElement("button");
-        b.className = "act"; b.textContent = "Sign in to Xelta";
-        b.onclick = () => say("Sign me in to Xelta, then retry my previous request.");
-        box.append(b);
-      }
-      return box;
+      title = "Couldn't create this one"; sub = job.error || "Try again in a moment.";
+    } else if (job.type === "video" && job.stage === "preparing") {
+      const d = job.stage_detail || "Checking it fits the model";
+      title = "Preparing your clip…"; sub = d.charAt(0).toUpperCase() + d.slice(1) + ".";
+    } else if (job.type === "video") {
+      title = "Rendering video…"; sub = "Usually 2–5 minutes. This updates by itself.";
+    } else {
+      title = "Creating image…"; sub = "A few seconds.";
     }
-    if (job.type === "video" && job.stage === "preparing") {
-      // The source is being converted to what the model accepts (size, fps, length, format).
-      title.textContent = "Preparing your clip…";
-      const detail = job.stage_detail || "Checking it fits the model";
-      sub.textContent = detail.charAt(0).toUpperCase() + detail.slice(1) + ".";
-      box.append(title, sub);
-      return box;
-    }
-    title.textContent = job.type === "video" ? "Rendering video…" : "Creating image…";
-    sub.textContent = job.type === "video" ? "Usually 2–5 minutes. This updates by itself." : "A few seconds.";
-    box.append(title, sub);
+    box.append(text("strong", "", title), text("span", "", sub));
     return box;
   }
 
-  function card(job, many) {
-    const el = document.createElement("div");
-    el.className = "card " + job.status;
-    const result = (job.results || [])[0];
-    el.appendChild(job.status === "completed" && result ? mediaEl(result, job) : placeholder(job));
-    if (many && job.label) {
-      const chip = document.createElement("span");
-      chip.className = "chip"; chip.textContent = job.label;
-      el.appendChild(chip);
-    }
-    const foot = document.createElement("div");
-    foot.className = "foot";
-    const cap = document.createElement("p");
-    cap.className = "caption"; cap.textContent = job.caption || ""; cap.title = job.caption || "";
-    foot.appendChild(cap);
-    if (job.status === "completed" && result && result.type === "image" && app) {
-      // Same idea as Higgsfield's Edit button: the message names the exact
-      // media_id, so "this one" can never be ambiguous.
-      const edit = document.createElement("button");
-      edit.className = "act"; edit.textContent = "Edit this";
-      edit.onclick = () => say(`I want to edit this image — media_id ${result.media_id}.`);
-      foot.appendChild(edit);
-    }
-    if (job.caption || foot.children.length > 1) el.appendChild(foot);
-    return el;
+  function button(label, iconName, cls, onClick) {
+    const b = el("button", "btn" + (cls ? " " + cls : ""), `${iconName ? icon(iconName) : ""}<span></span>`);
+    b.lastChild.textContent = label;
+    b.onclick = onClick;
+    return b;
   }
 
+  function actions(job) {
+    const bar = el("div", "actions");
+    const result = (job.results || [])[0];
+
+    if (confirming.has(job.job_id)) {
+      const credits = (job.meta || {}).credits;
+      const ask = el("span", "confirm");
+      ask.appendChild(text("span", "", credits ? `Use ${credits.toLocaleString()} credits to make it again?` : "Make it again? This uses credits."));
+      ask.appendChild(button(job.status === "failed" ? "Try again" : "Recreate", "", "primary", () => recreate(job)));
+      ask.appendChild(button("Cancel", "", "", () => { confirming.delete(job.job_id); render(); }));
+      bar.appendChild(ask);
+      return bar;
+    }
+
+    if (job.status === "completed" && result) {
+      bar.appendChild(button("Download", "download", "primary", (e) => download(job, result, e.currentTarget)));
+      if (job.can_recreate && app) bar.appendChild(button("Recreate", "again", "", () => { errors.delete(job.job_id); confirming.add(job.job_id); render(); }));
+      if (result.type === "image" && app) {
+        // The message names the exact media_id, so "this one" can never be ambiguous.
+        bar.appendChild(button("Edit this", "edit", "", () => say(`I want to edit this image — media_id ${result.media_id}.`)));
+      }
+    } else if (job.status === "failed") {
+      if (job.recovery_tool === "xelta_login") {
+        bar.appendChild(button("Sign in to Xelta", "", "primary", () => say("Sign me in to Xelta, then retry my previous request.")));
+      } else if (job.can_recreate && app) {
+        bar.appendChild(button("Try again", "again", "", () => { errors.delete(job.job_id); confirming.add(job.job_id); render(); }));
+      }
+    }
+    if (errors.has(job.job_id)) bar.appendChild(text("span", "note", errors.get(job.job_id)));
+    return bar;
+  }
+
+  function card(job, many) {
+    const node = el("article", "card " + job.status);
+    const result = (job.results || [])[0];
+    const stage = el("div", "stage");
+    stage.appendChild(job.status === "completed" && result ? media(result, job) : placeholder(job));
+    node.append(info(job, many), stage, actions(job));
+    return node;
+  }
+
+  // ── "how long?" ──────────────────────────────────────────────────────────────
+  function choiceCard() {
+    const d = choice.duration;
+    const node = el("article", "card choice");
+    const head = el("div", "choice-head");
+    const logo = el("img"); logo.src = LOGO; logo.alt = "Xelta";
+    const words = el("div");
+    words.append(text("h3", "", "How long should the video be?"),
+                 text("p", "", `Your clip is ${d.source_seconds}s. Kling edits up to 10 seconds of it, from the start.`));
+    head.append(logo, words);
+    const row = el("div", "options");
+    const whole = d.source_seconds <= 10.05;
+    d.options.forEach((n, i) => {
+      const b = el("button", "opt" + (picked === n ? " picked" : ""));
+      const last = i === d.options.length - 1;
+      b.append(text("strong", "", `${n} seconds`),
+               text("span", "", last && whole ? "The whole clip" : `First ${n}s of the clip`));
+      b.disabled = !!picked || !app;
+      b.onclick = () => { picked = n; render(); say(`Make it ${n} seconds.`); };
+      row.appendChild(b);
+    });
+    node.append(head, row);
+    return node;
+  }
+
+  // ── rendering ────────────────────────────────────────────────────────────────
   function render() {
-    if (!jobs.length) { $("wrap").hidden = true; return; }
+    if (!jobs.length && !choice) { $("wrap").hidden = true; return; }
     $("wrap").hidden = false;
+    if (!jobs.length) {
+      $("grid").className = "grid one";
+      $("grid").replaceChildren(choiceCard());
+      $("status").hidden = true;
+      return;
+    }
     const many = jobs.length > 1;
     $("grid").className = "grid " + (many ? "many" : "one");
     $("grid").replaceChildren(...jobs.map((j) => card(j, many)));
@@ -177,15 +312,51 @@
 
   // Let the model know what finished, so a follow-up works without re-reading.
   function report(job) {
-    if (reported.has(job.job_id) || !terminal(job) || !app || !caps().updateModelContext) return;
+    if (reported.has(job.job_id) || !terminal(job)) return;
     reported.add(job.job_id);
     const r = (job.results || [])[0];
-    const text = job.status === "completed" && r
+    tellModel(job.status === "completed" && r
       ? `${job.label || "Generation"} finished and is shown to the user: media_id ${r.media_id} (${r.type})${job.caption ? ` — "${job.caption}"` : ""}.`
-      : `${job.label || "Generation"} failed: ${job.error}${job.recovery_tool ? ` (recovery_tool: ${job.recovery_tool})` : ""}.`;
-    app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => {});
+      : `${job.label || "Generation"} failed: ${job.error}${job.recovery_tool ? ` (recovery_tool: ${job.recovery_tool})` : ""}.`);
   }
 
+  // ── actions ──────────────────────────────────────────────────────────────────
+  async function download(job, result, btn) {
+    btn.disabled = true;
+    const label = btn.lastChild.textContent;
+    btn.lastChild.textContent = "Preparing…";
+    const name = "xelta-" + (job.label || "result").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    let url = result.url;
+    try {
+      const res = await app.callServerTool({ name: "media_download", arguments: { media_id: result.media_id, filename: name } });
+      if (res && !res.isError && res.structuredContent && res.structuredContent.url) url = res.structuredContent.url;
+    } catch { /* fall back to the public link */ }
+    openExternal(url);
+    btn.disabled = false;
+    btn.lastChild.textContent = label;
+  }
+
+  async function recreate(job) {
+    confirming.delete(job.job_id);
+    render();
+    try {
+      const res = await app.callServerTool({ name: "job_recreate", arguments: { job_id: job.job_id } });
+      const next = res && !res.isError && res.structuredContent && (res.structuredContent.jobs || [])[0];
+      if (!next) {
+        const why = ((res && res.content) || []).map((c) => c.text || "").join(" ").trim();
+        throw new Error(why || "Couldn't start it again.");
+      }
+      jobs.splice(jobs.indexOf(job) + 1, 0, next);
+      render();
+      schedule(next, next.poll_after_seconds);
+      tellModel(`The user made ${job.label || "a result"} again from the card: new job_id ${next.job_id}.`);
+    } catch (e) {
+      errors.set(job.job_id, e.message || "Couldn't start it again.");
+      render();
+    }
+  }
+
+  // ── polling ──────────────────────────────────────────────────────────────────
   function schedule(job, seconds) {
     clearTimeout(timers.get(job.job_id));
     if (terminal(job) || !app || !caps().serverTools) return;
@@ -218,6 +389,7 @@
 
   function load(sc) {
     jobs = (sc && sc.jobs) || [];
+    choice = (sc && sc.choice && sc.choice.duration && !jobs.length) ? sc.choice : null;
     render();
     jobs.forEach((j) => (terminal(j) ? report(j) : schedule(j, j.poll_after_seconds)));
   }
@@ -229,7 +401,7 @@
   if (window.parent !== window) {
     try {
       const { App } = await import(SDK_URL);
-      app = new App({ name: "Xelta Generation", version: "2.0.0" });
+      app = new App({ name: "Xelta Generation", version: "2.1.0" });
       app.ontoolresult = (r) => load(r && r.structuredContent);
       app.onhostcontextchanged = applyTheme;
       await app.connect();

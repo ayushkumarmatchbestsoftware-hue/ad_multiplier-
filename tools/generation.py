@@ -9,11 +9,13 @@ user has to notice later.
 
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from tools import jobs, video_prep
 from tools import media_library as library
-from tools.ad_multiplier import KLING, _affordable, _split_list, build_prompt
+from tools.ad_multiplier import KLING, _affordable, _model_cost, _split_list, build_prompt
 from tools.image_gen import (
     DEFAULT_MODEL_ID,
     _SINGLE_IMAGE_KEYS,
@@ -37,6 +39,27 @@ _STYLE_ROLES = {"style", "style_reference", "style_image"}
 
 def _job_lookup(user_id: str):
     return lambda value: jobs.get_job(user_id, value)
+
+
+# ── what the result card shows about a request ────────────────────────────────
+
+_MODEL_NAMES = {DEFAULT_MODEL_ID: "Gemini 2.5 Flash", KLING["model_id"]: "Kling O3"}
+
+
+def _model_name(model_id: str) -> str:
+    return _MODEL_NAMES.get(model_id) or model_id.replace("-workflow", "").replace("-", " ").title()
+
+
+def _image_meta(model_id: str, size: str, credits: int) -> dict:
+    aspect = size if re.fullmatch(r"\d+:\d+", size or "") else ""
+    return {"model": _model_name(model_id), "aspect": aspect, "credits": credits}
+
+
+async def _cost(client: httpx.AsyncClient, model_id: str) -> int:
+    try:
+        return await _model_cost(client, model_id)
+    except Exception:
+        return 0
 
 
 def resolve_medias(user_id: str, medias: list[dict] | None) -> tuple[dict | None, dict | None]:
@@ -105,17 +128,19 @@ async def generate_image(user_id: str, *, prompt: str, model: str, medias: list[
         guard = await check_credits_guard(client)
         if guard:
             raise MediaError(guard)
+        credits = await _cost(client, model_id)
 
     job = jobs.start_image(
         user_id, model_id=model_id, prompt=prompt,
         image_url=image["url"] if image else "", style_image_url=style["url"] if style else "",
         size=size, optimize_prompt=optimize_prompt, caption=prompt,
+        meta=_image_meta(model_id, size, credits),
     )
     return {"jobs": [jobs.public(job)], "model": model_id}
 
 
 async def multiply_ad(user_id: str, *, source: str, variants: str, references: list[str] | None,
-                      model: str, size: str) -> dict:
+                      model: str, size: str, duration: int = 0) -> dict:
     if not (source or "").strip():
         raise MediaError(
             "Pass the ad to multiply as `source` (a media_id). For the user's own file call "
@@ -143,7 +168,7 @@ async def multiply_ad(user_id: str, *, source: str, variants: str, references: l
                                              has_style=False, size=size)
             if problem:
                 raise MediaError(problem)
-            warning, _ = await _affordable(client, model_id, len(edits))
+            warning, unit = await _affordable(client, model_id, len(edits))
             if warning:
                 raise MediaError(warning)
             # One size for the whole batch, matched to the source ad's shape.
@@ -156,28 +181,58 @@ async def multiply_ad(user_id: str, *, source: str, variants: str, references: l
                     user_id, model_id=model_id, prompt=build_prompt(edit, bool(ref), kind="image"),
                     image_url=src["url"], style_image_url=ref["url"] if ref else "",
                     size=size, optimize_prompt=True, label=f"Output {n}", caption=edit,
+                    meta=_image_meta(model_id, size, unit),
                 )
                 for n, (edit, ref) in enumerate(zip(edits, refs), 1)
             ]
             return {"jobs": [jobs.public(j) for j in started], "model": model_id}
 
-        warning, _ = await _affordable(client, KLING["model_id"], len(edits))
+        warning, unit = await _affordable(client, KLING["model_id"], len(edits))
         if warning:
             raise MediaError(warning)
 
     # Probe only (a second or two): an unreadable clip, or one that needs
     # converting on a machine without ffmpeg, is refused here. The conversion
     # itself runs inside the job.
-    plan = await video_prep.check(src, KLING)
+    info = await video_prep.inspect(src)
+
+    # Kling returns as much video as it's given, so "how long" means how much of
+    # the clip to use. Ask before spending anything when there's a real choice.
+    options = video_prep.duration_options(info.duration, KLING["input"])
+    if options and not duration:
+        return {"jobs": [], "model": KLING["model_id"], "source_changes": [],
+                "choice": {"duration": {"options": options, "source_seconds": round(info.duration, 1)}}}
+    lo, hi = KLING["input"]["min_seconds"], KLING["input"]["max_seconds"]
+    seconds = min(max(int(duration), lo), hi) if duration else 0
+    if seconds and seconds >= info.duration - 0.05:
+        seconds = 0  # the whole clip fits in what was asked for; nothing to trim
+    plan = video_prep.plan_for(info, KLING, seconds)
+    meta = {"model": _model_name(KLING["model_id"]), "aspect": video_prep.aspect_label(plan.width, plan.height),
+            "seconds": round(plan.seconds), "audio": plan.audio, "credits": unit}
 
     started = [
         jobs.start_video(
             user_id, source_media_id=src["media_id"],
             prompt=build_prompt(edit, bool(ref), tagged=True, limit=KLING["prompt_chars"]),
             reference_url=ref["url"] if ref else "",
-            label=f"Output {n}", caption=edit,
+            label=f"Output {n}", caption=edit, seconds=seconds, meta=meta,
         )
         for n, (edit, ref) in enumerate(zip(edits, refs), 1)
     ]
     return {"jobs": [jobs.public(j) for j in started], "model": KLING["model_id"],
-            "source_changes": plan.changes}
+            "source_changes": plan.changes, "seconds": round(plan.seconds)}
+
+
+async def recreate(user_id: str, job_id: str) -> dict:
+    """Run an earlier job again with the same inputs, after the same credit checks."""
+    job = jobs.get_job(user_id, job_id)
+    if not job:
+        raise MediaError(f"No job with id {job_id}.")
+    async with httpx.AsyncClient(timeout=30) as client:
+        guard = await check_credits_guard(client)
+        if guard:
+            raise MediaError(guard)
+        warning, _ = await _affordable(client, job["model"], 1)
+        if warning:
+            raise MediaError(warning)
+    return {"jobs": [jobs.public(jobs.recreate(user_id, job_id))], "model": job["model"]}

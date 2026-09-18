@@ -99,6 +99,9 @@ def public(job: dict) -> dict:
         # stage_detail saying what changed; "rendering" once it's submitted.
         "stage": job.get("stage", ""),
         "stage_detail": job.get("stage_detail", ""),
+        # What the card shows about the request: model, aspect, seconds, audio, credits.
+        "meta": job.get("meta", {}),
+        "can_recreate": bool(job.get("inputs")),
         "results": job.get("results", []),
         "error": job.get("error", ""),
         "recovery_tool": job.get("recovery_tool", ""),
@@ -106,8 +109,11 @@ def public(job: dict) -> dict:
     }
 
 
-def _new(user_id: str, kind: str, model: str, *, engine: str = "", label: str = "", caption: str = "") -> dict:
+def _new(user_id: str, kind: str, model: str, *, engine: str = "", label: str = "", caption: str = "",
+         inputs: dict | None = None, meta: dict | None = None) -> dict:
     return _write({
+        "inputs": inputs or {},
+        "meta": meta or {},
         "job_id": str(uuid.uuid4()),
         "user_id": user_id,
         "type": kind,
@@ -170,8 +176,11 @@ def _fail_from_http(job_id: str, e: httpx.HTTPStatusError) -> None:
 # ── image ─────────────────────────────────────────────────────────────────────
 
 def start_image(user_id: str, *, model_id: str, prompt: str, image_url: str, style_image_url: str,
-                size: str, optimize_prompt: bool, label: str = "", caption: str = "") -> dict:
-    job = _new(user_id, "image", model_id, label=label, caption=caption or prompt)
+                size: str, optimize_prompt: bool, label: str = "", caption: str = "",
+                meta: dict | None = None) -> dict:
+    inputs = {"model_id": model_id, "prompt": prompt, "image_url": image_url,
+              "style_image_url": style_image_url, "size": size, "optimize_prompt": optimize_prompt}
+    job = _new(user_id, "image", model_id, label=label, caption=caption or prompt, inputs=inputs, meta=meta)
     _spawn(job["job_id"], _run_image(job["job_id"], model_id, prompt, image_url,
                                      style_image_url, size, optimize_prompt))
     return job
@@ -202,15 +211,31 @@ async def _run_image(job_id, model_id, prompt, image_url, style_image_url, size,
 # ── video ─────────────────────────────────────────────────────────────────────
 
 def start_video(user_id: str, *, source_media_id: str, prompt: str, reference_url: str,
-                label: str = "", caption: str = "") -> dict:
+                label: str = "", caption: str = "", seconds: float = 0, meta: dict | None = None) -> dict:
     from tools.ad_multiplier import KLING
 
-    job = _new(user_id, "video", KLING["model_id"], label=label, caption=caption)
-    _spawn(job["job_id"], _run_video(job["job_id"], source_media_id, prompt, reference_url))
+    inputs = {"source_media_id": source_media_id, "prompt": prompt,
+              "reference_url": reference_url, "seconds": seconds}
+    job = _new(user_id, "video", KLING["model_id"], label=label, caption=caption, inputs=inputs, meta=meta)
+    _spawn(job["job_id"], _run_video(job["job_id"], source_media_id, prompt, reference_url, seconds))
     return job
 
 
-async def _run_video(job_id, source_media_id, prompt, reference_url):
+def recreate(user_id: str, job_id: str) -> dict:
+    """Start a new job with exactly the inputs of an earlier one (charged again)."""
+    job = get_job(user_id, job_id)
+    if not job:
+        raise MediaError(f"No job with id {job_id}.")
+    inputs = job.get("inputs")
+    if not inputs:
+        raise MediaError("This one was made before Recreate was available. Ask Claude to run the same edit again.")
+    same = {"label": job.get("label", ""), "caption": job.get("caption", ""), "meta": job.get("meta") or {}}
+    if job["type"] == "video":
+        return start_video(user_id, **inputs, **same)
+    return start_image(user_id, **inputs, **same)
+
+
+async def _run_video(job_id, source_media_id, prompt, reference_url, seconds=0):
     from tools import video_prep
     from tools.ad_multiplier import KLING, _job_id, _result_url, _submit
 
@@ -221,6 +246,7 @@ async def _run_video(job_id, source_media_id, prompt, reference_url):
         clip = await video_prep.prepare(
             job["user_id"], source_media_id, KLING,
             on_convert=lambda plan: _update(job_id, stage_detail=plan.summary()),
+            seconds=seconds,
         )
     except MediaError as e:
         _update(job_id, status="failed", stage="", error=str(e))
@@ -231,8 +257,11 @@ async def _run_video(job_id, source_media_id, prompt, reference_url):
         return
 
     sent_ms = int(time.time() * 1000)
+    # The card's chips describe the clip Kling actually gets.
+    meta = {**(job.get("meta") or {}), "aspect": video_prep.aspect_label(clip.width, clip.height),
+            "seconds": round(clip.seconds), "audio": clip.audio}
     job = _update(job_id, sent_ms=sent_ms, stage="rendering", source_sent=clip.url,
-                  prep_changes=clip.changes) or job
+                  prep_changes=clip.changes, meta=meta) or job
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             response = await _submit(client, video_url=clip.url, prompt=prompt, reference_url=reference_url)

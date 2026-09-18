@@ -25,8 +25,9 @@ import ipaddress
 import json
 import socket
 import sys
+import re
 import time
-from urllib.parse import urlencode, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 
 import httpx
 from starlette.requests import Request
@@ -300,6 +301,36 @@ async def media_import_url(user_id: str, url: str) -> dict:
                         size=len(body), duration=duration, media_id=media_id,
                         width=width, height=height)
     return {"media_id": entry["media_id"], "type": entry["type"], "url": entry["url"]}
+
+
+# ── download ──────────────────────────────────────────────────────────────────
+
+DOWNLOAD_LINK_TTL_SECONDS = 3600
+
+
+def download_link(user_id: str, media_id: str, filename: str = "") -> dict:
+    """A short-lived link that downloads the file instead of playing it in the browser.
+
+    Public media URLs open inline; a presigned GET can set Content-Disposition, so
+    the browser saves it under a readable name.
+    """
+    entry = library.get(user_id, media_id)
+    if not entry or not entry.get("url"):
+        raise MediaError(f"No media with id {media_id}.")
+    url = entry["url"]
+    if not library.is_own_url(url) or not r2_configured():
+        return {"url": url, "filename": ""}
+    key = entry.get("key") or unquote(urlparse(url).path.lstrip("/"))
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key.rsplit("/", 1)[-1] else ""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", filename or f"xelta-{media_id[:8]}").strip("-.") or "xelta"
+    name = f"{stem}.{ext}" if ext and not stem.lower().endswith("." + ext) else stem
+    signed = _r2().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": R2_BUCKET_NAME, "Key": key,
+                "ResponseContentDisposition": f'attachment; filename="{name}"'},
+        ExpiresIn=DOWNLOAD_LINK_TTL_SECONDS,
+    )
+    return {"url": signed, "filename": name}
 
 
 # ── show_medias ───────────────────────────────────────────────────────────────

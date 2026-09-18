@@ -395,7 +395,7 @@ async def generate_image(prompt: str = "", model: str = "", medias: list[dict] |
                  "idempotentHint": False, "openWorldHint": True},
 )
 async def multiply_ad(source: str, variants: str, references: list[str] | None = None,
-                      model: str = "", size: str = "") -> CallToolResult:
+                      model: str = "", size: str = "", duration: int = 0) -> CallToolResult:
     """
     Turn one ad (image or video) into several independently edited variants — swapping
     people, products, outfits, objects or backgrounds while keeping the original
@@ -406,6 +406,12 @@ async def multiply_ad(source: str, variants: str, references: list[str] | None =
 
     Video edits always run on Kling O3 Pro Video Editor: 2,670 credits per variant,
     keeps the source audio, uses up to the first 10 seconds. There is no other video model.
+
+    Video length: the output is as long as the part of the clip used (3-10 s). Don't
+    pick it yourself. If the user hasn't said how long, call without `duration`: when
+    the clip allows a choice, nothing starts and the result lists the options (the card
+    shows them as buttons). Ask the user in one short sentence, wait, then call again
+    with the same arguments plus their `duration`.
 
     Any video works as the source — any resolution, frame rate, format (MP4, MOV, WebM,
     MKV, AVI), HDR or phone rotation. It is converted automatically to what the model
@@ -421,17 +427,73 @@ async def multiply_ad(source: str, variants: str, references: list[str] | None =
             every pairing.
         model: Image only — leave empty for Gemini 2.5 Flash (59 credits each).
         size: Image only — only if the user asked for a size.
+        duration: Video only — seconds of the clip to use (3-10). Only when the user said
+            how long; otherwise leave it out and ask when the result says to.
     """
     try:
         out = await generation.multiply_ad(_user(), source=source, variants=variants,
-                                           references=references, model=model, size=size)
+                                           references=references, model=model, size=size,
+                                           duration=duration)
     except Exception as e:
         return _error(e)
+    if out.get("choice"):
+        d = out["choice"]["duration"]
+        options = " or ".join(f"{n} seconds" for n in d["options"])
+        return _ok(
+            f"Nothing has started yet. The clip is {d['source_seconds']}s and Kling edits up to "
+            f"10s of it, from the start. Ask the user how long the video should be: {options}. "
+            "The card shows these as buttons. Ask in one short sentence and wait; then call "
+            "multiply_ad again with the same source, variants and references plus duration.",
+            {"jobs": [], "choice": out["choice"]},
+        )
     kind = out["jobs"][0]["type"] if out["jobs"] else "media"
-    summary = f"Started {len(out['jobs'])} {kind} variant job(s) with {out['model']}."
+    summary = f"Started {len(out['jobs'])} {kind} variant job(s) with {out['model']}"
+    summary += f", {out['seconds']}s each." if out.get("seconds") else "."
     if out.get("source_changes"):
         summary += " The source clip is converted first so the model accepts it: " + "; ".join(out["source_changes"]) + "."
     return _jobs_result(out, summary)
+
+
+@mcp.tool(
+    meta=widgets.ui_meta(widgets.GENERATION_URI),
+    annotations={"title": "Job Status", "readOnlyHint": True, "destructiveHint": False,
+                 "idempotentHint": True, "openWorldHint": True},
+)
+async def job_recreate(job_id: str) -> CallToolResult:
+    """
+    Run a finished or failed generation again with exactly the same inputs: a new
+    result, charged again. The result card's Recreate button calls this. Use it when
+    the user asks to redo or retry a specific output.
+
+    Args:
+        job_id: The job to run again.
+    """
+    try:
+        out = await generation.recreate(_user(), job_id)
+    except Exception as e:
+        return _error(e)
+    return _jobs_result(out, f"Started it again as a new job with {out['model']}.")
+
+
+@mcp.tool(
+    meta={"ui": {"visibility": ["app"]}},
+    annotations={"title": "Download Link", "readOnlyHint": True, "destructiveHint": False,
+                 "idempotentHint": True, "openWorldHint": False},
+)
+async def media_download(media_id: str, filename: str = "") -> CallToolResult:
+    """
+    A one-hour link that downloads a result or upload as a file. Used by the result
+    card's Download button.
+
+    Args:
+        media_id: The media to download.
+        filename: Name to save it under, without extension.
+    """
+    try:
+        link = media_tools.download_link(_user(), media_id, filename)
+    except Exception as e:
+        return _error(e)
+    return _ok(f"Download link for {media_id} (valid 1 hour): {link['url']}", link)
 
 
 @mcp.tool(
